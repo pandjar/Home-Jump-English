@@ -14,7 +14,7 @@ def generar_imagenes_base64():
     
     resultado = {}
     
-    print("🔄 Convirtiendo imágenes a base64...")
+    print(" Convirtiendo imágenes a base64...")
     print("=" * 60)
     
     for img in imagenes:
@@ -31,11 +31,11 @@ def generar_imagenes_base64():
                     resultado[nombre_base] = base64_str
                     
                     tamaño_kb = len(contenido) / 1024
-                    print(f"✅ {img:<20} → {tamaño_kb:.1f} KB")
+                    print(f" {img:<20} → {tamaño_kb:.1f} KB")
             except Exception as e:
-                print(f"❌ Error con {img}: {e}")
+                print(f" Error con {img}: {e}")
         else:
-            print(f"⚠️  No encontrado: {ruta_completa}")
+            print(f"  No encontrado: {ruta_completa}")
     
     print("=" * 60)
     
@@ -54,8 +54,8 @@ def generar_imagenes_base64():
         
         f.write("}\n")
     
-    print(f"\n✅ Archivo 'imagenes_base64.py' generado exitosamente")
-    print(f"📊 Total de imágenes procesadas: {len(resultado)}")
+    print(f"\n Archivo 'imagenes_base64.py' generado exitosamente")
+    print(f" Total de imágenes procesadas: {len(resultado)}")
     return len(resultado)
 
 

@@ -4,9 +4,9 @@ import os
 # Intentar importar las imágenes base64 generadas
 try:
     from imagenes_base64 import IMAGENES_BASE64
-    print("✅ Imágenes base64 importadas correctamente")
+    print(" Imágenes base64 importadas correctamente")
 except ImportError:
-    print("⚠️ No se encontró imagenes_base64.py - ejecuta generar_base64.py primero")
+    print(" No se encontró imagenes_base64.py - ejecuta generar_base64.py primero")
     IMAGENES_BASE64 = {}
 
 
@@ -18,7 +18,7 @@ class GestorImagenes:
         self.imagenes = {}
         self.imagenes_base64 = IMAGENES_BASE64.copy()
         self.cargar_configuracion()
-        print(f"📊 Gestor inicializado con {len(self.imagenes_base64)} imágenes base64")
+        print(f" Gestor inicializado con {len(self.imagenes_base64)} imágenes base64")
     
     def cargar_configuracion(self):
         """Carga rutas de respaldo desde JSON"""

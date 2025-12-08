@@ -5,10 +5,10 @@ import flet as ft
 # Intentar importar las imágenes base64 generadas
 try:
     from imagenes_base64 import IMAGENES_BASE64
-    print("✅ Imágenes base64 cargadas correctamente")
+    print(" Imágenes base64 cargadas correctamente")
     USAR_BASE64 = True
 except ImportError:
-    print("⚠️ No se encontró imagenes_base64.py, usando rutas de archivos")
+    print(" No se encontró imagenes_base64.py, usando rutas de archivos")
     IMAGENES_BASE64 = {}
     USAR_BASE64 = False
 
@@ -33,7 +33,7 @@ class GestorImagenes:
                     base64_str = ''.join(base64_str)
                 # Guardar raw sin prefijo
                 self.imagenes_base64_raw[nombre] = base64_str
-            print(f"✅ Gestor: {len(self.imagenes_base64_raw)} imágenes en base64")
+            print(f" Gestor: {len(self.imagenes_base64_raw)} imágenes en base64")
         else:
             # Usar rutas de archivos
             try:
@@ -46,12 +46,12 @@ class GestorImagenes:
                         elif ruta.startswith("images/"):
                             ruta = "assets/" + ruta
                         self.imagenes_rutas[nombre] = ruta
-                    print(f"✅ Gestor: {len(self.imagenes_rutas)} rutas cargadas desde JSON")
+                    print(f" Gestor: {len(self.imagenes_rutas)} rutas cargadas desde JSON")
             except FileNotFoundError:
-                print(f"⚠️ No se encontró {self.config_file}")
+                print(f" No se encontró {self.config_file}")
                 self._cargar_rutas_por_defecto()
             except json.JSONDecodeError as e:
-                print(f"❌ Error al leer JSON: {e}")
+                print(f" Error al leer JSON: {e}")
                 self._cargar_rutas_por_defecto()
     
     def _cargar_rutas_por_defecto(self):
@@ -64,7 +64,7 @@ class GestorImagenes:
             "Imagen7": "assets/images/Imagen7.png",
             "Imagen8": "assets/images/Imagen8.png",
         }
-        print(f"✅ Rutas por defecto cargadas: {len(self.imagenes_rutas)} imágenes")
+        print(f" Rutas por defecto cargadas: {len(self.imagenes_rutas)} imágenes")
     
     def get(self, nombre_imagen):
         """
