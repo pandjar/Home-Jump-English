@@ -57,7 +57,7 @@ TICK         = 0.032
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 def main(page: ft.Page):
-    page.title           = "WordJump"
+    page.title           = "Home Jump"
     page.bgcolor         = "#0d0d2b"
     page.padding         = 0
     page.window.width    = W + 20
@@ -194,6 +194,79 @@ def main(page: ft.Page):
         if gs["py"] > H + 90:
             end_game()
 
+    def show_game_over_dialog():
+        word_rows = [
+            ft.Row([
+                ft.Text(w.capitalize(), width=110, color="#ffd700",
+                        size=13, weight=ft.FontWeight.BOLD),
+                ft.Text(f"→  {TRANSLATIONS.get(w, '')}", color="#ffffff", size=13),
+            ])
+            for w in gs["found"][:7]
+        ]
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            bgcolor="#0d0d2b",
+            shape=ft.RoundedRectangleBorder(radius=16),
+            content=ft.Container(
+                width=270,
+                padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                content=ft.Column([
+                    ft.Text("GAME OVER", size=30, color="#ff4444",
+                            weight=ft.FontWeight.BOLD,
+                            text_align=ft.TextAlign.CENTER),
+                    ft.Container(height=4),
+                    ft.Text(f"🏠  Altura alcanzada: {gs['score']}",
+                            size=16, color="#ffffff", text_align=ft.TextAlign.CENTER),
+                    ft.Text(f"📚  Palabras encontradas: {len(gs['found'])}",
+                            size=14, color="#00ff88", text_align=ft.TextAlign.CENTER),
+                    ft.Container(
+                        content=ft.Column(word_rows, spacing=3),
+                        visible=len(word_rows) > 0,
+                        padding=ft.padding.symmetric(vertical=6),
+                    ),
+                    ft.Container(height=6),
+                    ft.ElevatedButton(
+                        "▶  REINICIAR",
+                        width=200,
+                        style=ft.ButtonStyle(
+                            bgcolor="#00e5ff", color="#000000",
+                            text_style=ft.TextStyle(size=16, weight=ft.FontWeight.BOLD),
+                            shape=ft.RoundedRectangleBorder(radius=10),
+                        ),
+                        on_click=lambda _: on_restart(dlg),
+                    ),
+                    ft.Container(height=2),
+                    ft.OutlinedButton(
+                        "🏠  Ir al menú",
+                        width=200,
+                        style=ft.ButtonStyle(
+                            color="#00e5ff",
+                            side=ft.BorderSide(1, "#00e5ff"),
+                            shape=ft.RoundedRectangleBorder(radius=10),
+                        ),
+                        on_click=lambda _: on_go_menu(dlg),
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=6, tight=True),
+            ),
+        )
+
+        def on_restart(d):
+            d.open = False
+            page.update()
+            _init_and_launch()
+
+        def on_go_menu(d):
+            d.open = False
+            page.update()
+            show_menu()
+
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+
     def end_game():
         gs["over"]    = True
         gs["running"] = False
@@ -204,6 +277,7 @@ def main(page: ft.Page):
             if w not in record["words_found"]:
                 record["words_found"].append(w)
         save_record(record)
+        show_game_over_dialog()
 
     # ── render ────────────────────────────────────────────────────────────────
     game_stack = ft.Stack(width=W, height=H, clip_behavior=ft.ClipBehavior.HARD_EDGE)
@@ -328,57 +402,7 @@ def main(page: ft.Page):
                 ], alignment=ft.MainAxisAlignment.CENTER),
             ))
 
-        # game over overlay
-        if gs["over"]:
-            items.append(ft.Container(width=W, height=H, bgcolor="#bb000022"))
-            word_rows = [
-                ft.Row([
-                    ft.Text(w.capitalize(), width=110, color="#ffd700",
-                            size=13, weight=ft.FontWeight.BOLD),
-                    ft.Text(f"→  {TRANSLATIONS.get(w, '')}", color="#ffffff", size=13),
-                ])
-                for w in gs["found"][:7]
-            ]
-            items.append(ft.Container(
-                left=W // 2 - 145, top=H // 2 - 150,
-                width=290,
-                bgcolor="#ee0d0d2b",
-                border_radius=16,
-                border=ft.border.all(2, "#00e5ff"),
-                padding=18,
-                content=ft.Column([
-                    ft.Text("GAME OVER", size=28, color="#ff4444",
-                            weight=ft.FontWeight.BOLD,
-                            text_align=ft.TextAlign.CENTER),
-                    ft.Text(f"Altura alcanzada: {gs['score']}",
-                            size=16, color="#ffffff", text_align=ft.TextAlign.CENTER),
-                    ft.Text(f"Palabras encontradas: {len(gs['found'])}",
-                            size=14, color="#00ff88", text_align=ft.TextAlign.CENTER),
-                    ft.Container(
-                        ft.Column(word_rows, spacing=3),
-                        visible=len(word_rows) > 0,
-                        padding=ft.padding.symmetric(vertical=4),
-                    ),
-                    ft.Container(height=4),
-                    ft.ElevatedButton(
-                        "▶  REINICIAR",
-                        width=190,
-                        style=ft.ButtonStyle(
-                            bgcolor="#00e5ff", color="#000000",
-                            text_style=ft.TextStyle(size=15, weight=ft.FontWeight.BOLD),
-                            shape=ft.RoundedRectangleBorder(radius=10),
-                        ),
-                        on_click=lambda _: start_game(),
-                    ),
-                    ft.TextButton(
-                        "🏠  Ir al menú",
-                        style=ft.ButtonStyle(color="#aaffffff"),
-                        on_click=lambda _: show_menu(),
-                    ),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=7, tight=True),
-            ))
+        # game over is handled by show_game_over_dialog(), not rendered here
 
         game_stack.controls = items
         try:
@@ -387,23 +411,12 @@ def main(page: ft.Page):
             pass
 
     # ── game loop ─────────────────────────────────────────────────────────────
+    # nav flag: None | "restart" | "menu"
+    # Buttons set this flag + stop the loop; the loop thread acts on it after exiting.
     _active = {"v": False}
 
-    def loop():
-        while _active["v"]:
-            step()
-            render()
-            time.sleep(TICK)
-
-    def start_game():
-        _active["v"] = False
-        time.sleep(TICK * 3)
-
-        init_state()
-        gs["running"] = True
-        gen_platforms()
-        pick_target()
-
+    def _build_game_ui():
+        """Build and show the game screen (stack + control bar)."""
         page.controls.clear()
         page.add(ft.Column([
             game_stack,
@@ -411,7 +424,6 @@ def main(page: ft.Page):
                 height=88, bgcolor="#0a0a22",
                 border=ft.border.only(top=ft.BorderSide(1, "#22ffffff")),
                 content=ft.Row([
-                    # LEFT button
                     ft.GestureDetector(
                         content=ft.Container(
                             width=130, height=86,
@@ -428,17 +440,14 @@ def main(page: ft.Page):
                     ),
                     ft.Container(expand=True,
                                  content=ft.Column([
-                                     ft.Text("◀  ▶", size=12,
-                                             color="#44ffffff",
+                                     ft.Text("◀  ▶", size=12, color="#44ffffff",
                                              text_align=ft.TextAlign.CENTER),
-                                     ft.Text("mover", size=10,
-                                             color="#33ffffff",
+                                     ft.Text("mover", size=10, color="#33ffffff",
                                              text_align=ft.TextAlign.CENTER),
                                  ],
                                  horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                  alignment=ft.MainAxisAlignment.CENTER,
                                  spacing=0)),
-                    # RIGHT button
                     ft.GestureDetector(
                         content=ft.Container(
                             width=130, height=86,
@@ -458,8 +467,33 @@ def main(page: ft.Page):
         ], spacing=0))
         page.update()
 
+    def loop():
+        while _active["v"]:
+            step()
+            render()
+            time.sleep(TICK)
+
+    def _init_and_launch():
+        """Reset state, build UI, start loop thread."""
+        init_state()
+        gs["running"] = True
+        gen_platforms()
+        pick_target()
+        _build_game_ui()
         _active["v"] = True
         threading.Thread(target=loop, daemon=True).start()
+
+    def start_game():
+        """Called from the menu JUGAR button."""
+        _active["v"] = False
+        time.sleep(TICK * 2)
+        _init_and_launch()
+
+    def _request_restart(_=None):
+        pass  # kept for keyboard Space key compatibility
+
+    def _request_menu(_=None):
+        pass  # kept for keyboard compatibility
 
     # ── keyboard ──────────────────────────────────────────────────────────────
     def on_key(e: ft.KeyboardEvent):
@@ -467,8 +501,6 @@ def main(page: ft.Page):
             gs["left"] = True; gs["right"] = False
         elif e.key == "Arrow Right":
             gs["right"] = True; gs["left"] = False
-        elif e.key in (" ", "Space") and gs.get("over"):
-            start_game()
 
     page.on_keyboard_event = on_key
 
@@ -505,7 +537,7 @@ def main(page: ft.Page):
         page.update()
 
     def show_menu():
-        _active["v"] = False
+        _active["v"] = False  # ensure stopped in all cases
         page.controls.clear()
         page.add(ft.Container(
             expand=True,
@@ -516,7 +548,7 @@ def main(page: ft.Page):
             ),
             content=ft.Column([
                 ft.Container(height=36),
-                ft.Text("WORD", size=54, weight=ft.FontWeight.BOLD,
+                ft.Text("HOME", size=54, weight=ft.FontWeight.BOLD,
                         color="#00e5ff", text_align=ft.TextAlign.CENTER),
                 ft.Text("JUMP", size=54, weight=ft.FontWeight.BOLD,
                         color="#ffd700", text_align=ft.TextAlign.CENTER),
@@ -567,8 +599,8 @@ def main(page: ft.Page):
                 ft.Text(
                     "Las letras doradas aparecen en orden sobre\n"
                     "las plataformas. ¡Recógelas en secuencia!\n\n"
-                    " Plataforma normal\n"
-                    " Bouncy = salto extra alto",
+                    "🟦 Plataforma normal\n"
+                    "🟧 Bouncy = salto extra alto",
                     size=12, color="#88ffffff", text_align=ft.TextAlign.CENTER,
                 ),
             ],
