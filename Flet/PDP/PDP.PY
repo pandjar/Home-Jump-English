@@ -1,4 +1,4 @@
-#v1.16
+#v1.17
 #Jared Hdz Ctr "Pandajar"
 #python 3.14
 
@@ -18,7 +18,6 @@ VOCABULARY = {
     "Dining Room":  ["CHAIR","TABLECLOTH","SILVERWARE","PLATE","GLASS"],
     "Laundry Room": ["DRYER","IRON","WASHER"],
 }
-ALL_WORDS = [w for cat in VOCABULARY.values() for w in cat]
 
 TRANSLATIONS = {
     "SHOWER":"Ducha","BATHTUB":"Bañera","TOILET":"Inodoro","SINK":"Lavabo",
@@ -68,12 +67,16 @@ def main(page: ft.Page):
     page.window.height    = H + 130
     page.window.resizable = False
 
-    record = load_record()
-
-    # ── Comunicación hilo-loop ↔ hilo-UI
-    cmd         = {"v": None}
+    record   = load_record()
+    cmd      = {"v": None}
     loop_paused = threading.Event()
-    gs          = {}
+    gs       = {}
+
+    # Categorías activas (el jugador las elige antes de empezar)
+    sel_cats = {"v": list(VOCABULARY.keys())}
+
+    def active_words():
+        return [w for cat in sel_cats["v"] for w in VOCABULARY[cat]]
 
     # ── state
     def reset_gs():
@@ -85,33 +88,39 @@ def main(page: ft.Page):
             "platforms": [], "letters": [],
             "target": None, "tidx": 0,
             "collected": [], "found": [], "notif": None,
-            "over": False,
+            "over": False, "paused": False,
         })
 
     def pick_target():
-        rem = [w for w in ALL_WORDS if w not in gs["found"]] or ALL_WORDS[:]
+        words = active_words()
+        rem = [w for w in words if w not in gs["found"]] or words[:]
         gs["target"] = random.choice(rem)
         gs["tidx"]   = 0
         gs["collected"] = []
 
     # ── platforms
+    def _rand_type():
+        return random.choices(["normal","bouncy","deadly"], weights=[67, 18, 15])[0]
+
     def gen_platforms():
         gs["platforms"].append({"wx": 0, "wy": H - 30, "w": W, "type": "ground"})
         wy = H - 160
         for _ in range(22):
-            wx = random.randint(10, W - PLATW - 10)
-            gs["platforms"].append({"wx": wx, "wy": wy, "w": PLATW, "type": "normal"})
+            wx    = random.randint(10, W - PLATW - 10)
+            ptype = _rand_type()
+            gs["platforms"].append({"wx": wx, "wy": wy, "w": PLATW, "type": ptype})
             wy -= random.randint(72, 112)
 
     def extend_platforms():
         if not gs["platforms"]: return
         top = min(p["wy"] for p in gs["platforms"])
         while top > gs["cam"] - 350:
-            top -= random.randint(70, 120)
+            top  -= random.randint(70, 120)
             wx    = random.randint(10, W - PLATW - 10)
-            ptype = "bouncy" if random.random() < 0.18 else "normal"
+            ptype = _rand_type()
             gs["platforms"].append({"wx": wx, "wy": top, "w": PLATW, "type": ptype})
-            if gs["target"] and random.random() < 0.60:
+            # No letters on deadly platforms
+            if gs["target"] and ptype != "deadly" and random.random() < 0.60:
                 tw  = gs["target"]
                 idx = gs["tidx"] % len(tw)
                 gs["letters"].append({"wx": wx + PLATW//2 - 9,
@@ -138,6 +147,9 @@ def main(page: ft.Page):
                 if (gs["px"] + PW > p["wx"] + 4 and
                     gs["px"]       < p["wx"] + p["w"] - 4 and
                     pb_prev <= p["wy"] <= pb):
+                    if p["type"] == "deadly":
+                        do_end_game()
+                        return
                     gs["vy"] = JUMP * (1.4 if p["type"] == "bouncy" else 1.0)
 
         if gs["py"] < H * 0.42:
@@ -186,19 +198,30 @@ def main(page: ft.Page):
     game_stack = ft.Stack(width=W, height=H, clip_behavior=ft.ClipBehavior.HARD_EDGE)
 
     def render():
-        is_over = gs.get("over", False)
+        is_over   = gs.get("over", False)
+        is_paused = gs.get("paused", False)
         items = []
 
+        # Background
         items.append(ft.Container(width=W, height=H,
             gradient=ft.LinearGradient(
                 begin=ft.alignment.top_center, end=ft.alignment.bottom_center,
                 colors=["#0d0d2b", "#141450"])))
 
+        # Platforms
         for p in gs["platforms"]:
             sy = p["wy"] - gs["cam"]
             if -PLATH-4 < sy < H+PLATH:
-                col  = "#ff6b35" if p["type"]=="bouncy" else "#00e5ff"
-                gcol = "#22ff6b35" if p["type"]=="bouncy" else "#2200e5ff"
+                if p["type"] == "deadly":
+                    col  = "#ffd700"
+                    gcol = "#44ffd700"
+                elif p["type"] == "bouncy":
+                    col  = "#ff6b35"
+                    gcol = "#22ff6b35"
+                else:
+                    col  = "#00e5ff"
+                    gcol = "#2200e5ff"
+
                 items.append(ft.Container(left=p["wx"]-3, top=sy-3,
                     width=p["w"]+6, height=PLATH+6, bgcolor=gcol, border_radius=5))
                 items.append(ft.Container(left=p["wx"], top=sy,
@@ -206,6 +229,13 @@ def main(page: ft.Page):
                 items.append(ft.Container(left=p["wx"]+4, top=sy+2,
                     width=p["w"]-8, height=3, bgcolor="#66ffffff", border_radius=2))
 
+                # Skull above deadly platforms
+                if p["type"] == "deadly":
+                    items.append(ft.Container(
+                        left=p["wx"] + p["w"]//2 - 9, top=sy - 20,
+                        content=ft.Text("☠", size=15, color="#ffd700")))
+
+        # Letters
         for l in gs["letters"]:
             sy = l["wy"] - gs["cam"]
             if -30 < sy < H+30:
@@ -216,6 +246,7 @@ def main(page: ft.Page):
                     content=ft.Text(l["char"], size=17, color="#ffd700",
                                     weight=ft.FontWeight.BOLD)))
 
+        # Player
         items.append(ft.Container(
             left=gs["px"], top=gs["py"], width=PW, height=PH,
             bgcolor="#ffffff", border_radius=6,
@@ -230,17 +261,20 @@ def main(page: ft.Page):
             ], spacing=0),
         ))
 
+        # HUD — score
         items.append(ft.Container(left=8, top=6, content=ft.Column([
             ft.Text(f"Altura: {gs['score']}", size=15, color="#ffffff",
                     weight=ft.FontWeight.BOLD),
             ft.Text(f"Récord: {record['best_height']}", size=12, color="#00e5ff"),
         ], spacing=0)))
 
+        # HUD — words found count
         if gs["found"]:
             items.append(ft.Container(right=8, top=6,
                 content=ft.Text(f"✓ {len(gs['found'])}", size=13,
                                 color="#00ff88", weight=ft.FontWeight.BOLD)))
 
+        # HUD — target word
         if gs["target"]:
             tw   = gs["target"]
             disp = " ".join(c if i < gs["tidx"] else "_" for i, c in enumerate(tw))
@@ -252,6 +286,7 @@ def main(page: ft.Page):
                             color="#aaffffff", text_align=ft.TextAlign.CENTER),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=1)))
 
+        # Notification
         if gs["notif"]:
             items.append(ft.Container(left=0, top=H//2-30, width=W,
                 content=ft.Row([ft.Container(
@@ -262,6 +297,38 @@ def main(page: ft.Page):
                                     color="#00ff88", weight=ft.FontWeight.BOLD),
                 )], alignment=ft.MainAxisAlignment.CENTER)))
 
+        # ── PAUSE overlay
+        if is_paused and not is_over:
+            items.append(ft.Container(width=W, height=H, bgcolor="#aa000030"))
+            items.append(ft.Container(
+                left=W//2 - 110, top=H//2 - 100,
+                width=220, bgcolor="#ee0d0d2b",
+                border_radius=16, border=ft.border.all(2, "#00e5ff"),
+                padding=22,
+                content=ft.Column([
+                    ft.Text("⏸  PAUSA", size=28, color="#00e5ff",
+                            weight=ft.FontWeight.BOLD,
+                            text_align=ft.TextAlign.CENTER),
+                    ft.Container(height=14),
+                    ft.ElevatedButton("▶  Continuar", width=170,
+                        style=ft.ButtonStyle(
+                            bgcolor="#00e5ff", color="#000000",
+                            text_style=ft.TextStyle(size=15, weight=ft.FontWeight.BOLD),
+                            shape=ft.RoundedRectangleBorder(radius=10)),
+                        on_click=lambda _: toggle_pause(),
+                    ),
+                    ft.Container(height=8),
+                    ft.OutlinedButton("🏠  Ir al menú", width=170,
+                        style=ft.ButtonStyle(color="#00e5ff",
+                            side=ft.BorderSide(1,"#00e5ff"),
+                            shape=ft.RoundedRectangleBorder(radius=10)),
+                        on_click=lambda _: show_menu(),
+                    ),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                   spacing=4, tight=True),
+            ))
+
+        # ── GAME OVER panel
         if is_over:
             items.append(ft.Container(width=W, height=H, bgcolor="#bb000020"))
             word_rows = [
@@ -282,9 +349,9 @@ def main(page: ft.Page):
                             weight=ft.FontWeight.BOLD,
                             text_align=ft.TextAlign.CENTER),
                     ft.Container(height=2),
-                    ft.Text(f"  Altura: {gs['score']}", size=16,
+                    ft.Text(f"🏠  Altura: {gs['score']}", size=16,
                             color="#ffffff", text_align=ft.TextAlign.CENTER),
-                    ft.Text(f"  Palabras: {len(gs['found'])}", size=14,
+                    ft.Text(f"📚  Palabras: {len(gs['found'])}", size=14,
                             color="#00ff88", text_align=ft.TextAlign.CENTER),
                     ft.Container(content=ft.Column(word_rows, spacing=3),
                                  visible=len(word_rows) > 0,
@@ -298,7 +365,7 @@ def main(page: ft.Page):
                         on_click=lambda _: btn_restart(),
                     ),
                     ft.Container(height=2),
-                    ft.OutlinedButton("  Ir al menú", width=200,
+                    ft.OutlinedButton("🏠  Ir al menú", width=200,
                         style=ft.ButtonStyle(color="#00e5ff",
                             side=ft.BorderSide(1,"#00e5ff"),
                             shape=ft.RoundedRectangleBorder(radius=10)),
@@ -321,19 +388,17 @@ def main(page: ft.Page):
         playing = False
         while running["v"]:
             c = cmd["v"]
-
             if c == "start":
                 cmd["v"] = None
                 playing = True
                 loop_paused.clear()
-
             elif c == "stop":
                 cmd["v"] = None
                 playing = False
                 loop_paused.set()
 
             if playing:
-                if gs.get("over"):
+                if gs.get("over") or gs.get("paused"):
                     render()
                     time.sleep(0.1)
                 else:
@@ -345,27 +410,30 @@ def main(page: ft.Page):
 
     threading.Thread(target=game_loop, daemon=True).start()
 
-    # ── btn_restart  — sin deadlock, sin tocar page.controls
-    #
-    # En game-over el loop sigue corriendo (playing=True) pero solo hace
-    # render()+sleep(0.1). game_stack ya está en pantalla, no hay que
-    # reconstruir la página. Con resetear gs basta: el loop ve over=False
-    # en el siguiente tick y retoma step()+render() normalmente.
+    # ── Pause toggle (seguro desde cualquier hilo)
+    def toggle_pause():
+        if not gs.get("over"):
+            gs["paused"] = not gs.get("paused", False)
+
+    # ── btn_restart — sin deadlock, sin reconstruir page
     def btn_restart():
         reset_gs()
         gen_platforms()
         pick_target()
-        cmd["v"] = "start"   # por si el loop fue detenido (ej: venía del menú)
+        cmd["v"] = "start"
 
     # ── Teclado
     def on_key(e: ft.KeyboardEvent):
-        if not gs.get("over") and cmd["v"] is None:
+        if gs.get("over"):
+            if e.key == " ":
+                btn_restart()
+        elif e.key in ("Escape", "P", "p"):
+            toggle_pause()
+        elif not gs.get("paused"):
             if e.key == "Arrow Left":
                 gs["left"] = True; gs["right"] = False
             elif e.key == "Arrow Right":
                 gs["right"] = True; gs["left"] = False
-        elif gs.get("over") and e.key == " ":
-            btn_restart()
 
     page.on_keyboard_event = on_key
 
@@ -378,9 +446,10 @@ def main(page: ft.Page):
                 height=88, bgcolor="#0a0a22",
                 border=ft.border.only(top=ft.BorderSide(1,"#22ffffff")),
                 content=ft.Row([
+                    # Left arrow
                     ft.GestureDetector(
                         content=ft.Container(
-                            width=130, height=86, bgcolor="#1a1a40",
+                            width=120, height=86, bgcolor="#1a1a40",
                             border_radius=ft.border_radius.only(
                                 top_right=14, bottom_right=14),
                             content=ft.Icon(ft.Icons.ARROW_BACK_IOS_NEW,
@@ -391,16 +460,24 @@ def main(page: ft.Page):
                         on_tap_up=  lambda _: gs.update({"left":False}),
                         on_pan_end= lambda _: gs.update({"left":False}),
                     ),
-                    ft.Container(expand=True, content=ft.Column([
-                        ft.Text("◀  ▶", size=12, color="#44ffffff",
-                                text_align=ft.TextAlign.CENTER),
-                        ft.Text("mover", size=10, color="#33ffffff",
-                                text_align=ft.TextAlign.CENTER),
-                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                       alignment=ft.MainAxisAlignment.CENTER, spacing=0)),
+                    # Pause button (center)
                     ft.GestureDetector(
                         content=ft.Container(
-                            width=130, height=86, bgcolor="#1a1a40",
+                            expand=True, height=86, bgcolor="#111133",
+                            content=ft.Column([
+                                ft.Icon(ft.Icons.PAUSE_CIRCLE_OUTLINE,
+                                        color="#00e5ff", size=30),
+                                ft.Text("pausa", size=10, color="#44ffffff",
+                                        text_align=ft.TextAlign.CENTER),
+                            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                               alignment=ft.MainAxisAlignment.CENTER, spacing=2),
+                        ),
+                        on_tap=lambda _: toggle_pause(),
+                    ),
+                    # Right arrow
+                    ft.GestureDetector(
+                        content=ft.Container(
+                            width=120, height=86, bgcolor="#1a1a40",
                             border_radius=ft.border_radius.only(
                                 top_left=14, bottom_left=14),
                             content=ft.Icon(ft.Icons.ARROW_FORWARD_IOS,
@@ -424,9 +501,83 @@ def main(page: ft.Page):
         show_game()
         cmd["v"] = "start"
 
+    # ── Category selector (pantalla antes de jugar)
+    def show_category_select():
+        cmd["v"] = "stop"
+
+        def toggle_cat(cat):
+            if cat in sel_cats["v"]:
+                if len(sel_cats["v"]) > 1:   # mínimo 1 categoría
+                    sel_cats["v"].remove(cat)
+            else:
+                sel_cats["v"].append(cat)
+            show_category_select()            # refrescar pantalla
+
+        def make_row(cat):
+            selected = cat in sel_cats["v"]
+            words    = VOCABULARY[cat]
+            preview  = ", ".join(w.capitalize() for w in words[:3]) + "…"
+            return ft.GestureDetector(
+                on_tap=lambda _, c=cat: toggle_cat(c),
+                content=ft.Container(
+                    width=320, padding=9,
+                    bgcolor="#22ffffff" if selected else "#0d0d2b",
+                    border_radius=10,
+                    border=ft.border.all(
+                        2 if selected else 1,
+                        "#00e5ff" if selected else "#33ffffff"),
+                    content=ft.Row([
+                        ft.Icon(
+                            ft.Icons.CHECK_CIRCLE if selected
+                            else ft.Icons.RADIO_BUTTON_UNCHECKED,
+                            color="#00ff88" if selected else "#44ffffff", size=22),
+                        ft.Container(width=8),
+                        ft.Column([
+                            ft.Text(cat, size=14,
+                                    color="#ffffff" if selected else "#88ffffff",
+                                    weight=ft.FontWeight.BOLD),
+                            ft.Text(f"{len(words)} palabras · {preview}",
+                                    size=10, color="#55ffffff"),
+                        ], spacing=1, tight=True),
+                    ], tight=True),
+                ),
+            )
+
+        page.controls.clear()
+        page.add(ft.Container(
+            expand=True, bgcolor="#0d0d2b",
+            content=ft.Column([
+                ft.Container(height=28),
+                ft.Text("🏠  ¿Qué habitación practicar?", size=18,
+                        color="#00e5ff", weight=ft.FontWeight.BOLD,
+                        text_align=ft.TextAlign.CENTER),
+                ft.Text("Selecciona una o más categorías", size=12,
+                        color="#66ffffff", text_align=ft.TextAlign.CENTER),
+                ft.Container(height=14),
+                *[make_row(cat) for cat in VOCABULARY],
+                ft.Container(height=18),
+                ft.ElevatedButton("▶  JUGAR", width=230, height=52,
+                    style=ft.ButtonStyle(
+                        bgcolor="#00e5ff", color="#000000",
+                        text_style=ft.TextStyle(size=18, weight=ft.FontWeight.BOLD),
+                        shape=ft.RoundedRectangleBorder(radius=12)),
+                    on_click=lambda _: start_game()),
+                ft.Container(height=8),
+                ft.OutlinedButton("← Volver al menú", width=200,
+                    style=ft.ButtonStyle(color="#88ffffff",
+                        side=ft.BorderSide(1,"#44ffffff"),
+                        shape=ft.RoundedRectangleBorder(radius=10)),
+                    on_click=lambda _: show_menu()),
+                ft.Container(height=16),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+               spacing=8, scroll=ft.ScrollMode.AUTO),
+        ))
+        page.update()
+
     # ── show_menu
     def show_menu():
         cmd["v"] = "stop"
+        total_words = sum(len(v) for v in VOCABULARY.values())
         page.controls.clear()
         page.add(ft.Container(
             expand=True,
@@ -446,12 +597,12 @@ def main(page: ft.Page):
                 ft.Container(
                     padding=16, bgcolor="#22ffffff", border_radius=14, width=270,
                     content=ft.Column([
-                        ft.Text(f"  Récord: {record['best_height']}",
+                        ft.Text(f"🏆  Récord: {record['best_height']}",
                                 size=20, color="#ffd700", weight=ft.FontWeight.BOLD,
                                 text_align=ft.TextAlign.CENTER),
-                        ft.Text(f"  Palabras: {len(record['words_found'])} / {len(ALL_WORDS)}",
+                        ft.Text(f"📚  Palabras: {len(record['words_found'])} / {total_words}",
                                 size=14, color="#00ff88", text_align=ft.TextAlign.CENTER),
-                        ft.Text(f"  Partidas: {record.get('total_games',0)}",
+                        ft.Text(f"🎮  Partidas: {record.get('total_games',0)}",
                                 size=13, color="#aaffffff", text_align=ft.TextAlign.CENTER),
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)),
                 ft.Container(height=22),
@@ -460,9 +611,9 @@ def main(page: ft.Page):
                         bgcolor="#00e5ff", color="#000000",
                         text_style=ft.TextStyle(size=21, weight=ft.FontWeight.BOLD),
                         shape=ft.RoundedRectangleBorder(radius=14)),
-                    on_click=lambda _: start_game()),
+                    on_click=lambda _: show_category_select()),
                 ft.Container(height=10),
-                ft.OutlinedButton("  VER PALABRAS ENCONTRADAS", width=280,
+                ft.OutlinedButton("📖  VER PALABRAS ENCONTRADAS", width=280,
                     style=ft.ButtonStyle(
                         color="#00e5ff", side=ft.BorderSide(1,"#00e5ff"),
                         shape=ft.RoundedRectangleBorder(radius=10)),
@@ -473,39 +624,74 @@ def main(page: ft.Page):
                 ft.Container(height=4),
                 ft.Text("Las letras doradas aparecen en orden sobre\n"
                         "las plataformas. ¡Recógelas en secuencia!\n\n"
-                        "🟦 Normal   🟧 Bouncy = salto extra",
+                        "🟦 Normal   🟧 Bouncy = salto extra\n"
+                        "🟨 ☠ Amarilla = ¡PELIGRO! No la toques",
                         size=12, color="#88ffffff", text_align=ft.TextAlign.CENTER),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                spacing=6, scroll=ft.ScrollMode.AUTO),
         ))
         page.update()
 
+    # ── Palabras encontradas — agrupadas por categoría
     def show_words_inline():
-        words = record.get("words_found", [])
-        if not words:
-            body = ft.Text("Aún no has encontrado palabras.",
-                           color="#ffffff", size=14,
-                           text_align=ft.TextAlign.CENTER)
-        else:
-            body = ft.Column([
-                ft.Row([
-                    ft.Text(w.capitalize(), width=120, color="#ffd700",
-                            weight=ft.FontWeight.BOLD, size=14),
-                    ft.Text(f"→  {TRANSLATIONS.get(w,'')}", color="#ffffff", size=14),
-                ])
-                for w in sorted(words)
-            ], scroll=ft.ScrollMode.AUTO, height=340, spacing=4)
+        found_set   = set(record.get("words_found", []))
+        total_words = sum(len(v) for v in VOCABULARY.values())
+
+        sections = []
+        for cat, words in VOCABULARY.items():
+            found_here = [w for w in words if w in found_set]
+            n_found    = len(found_here)
+            n_total    = len(words)
+
+            # Cabecera de categoría
+            sections.append(ft.Container(
+                width=320,
+                padding=ft.padding.symmetric(horizontal=12, vertical=7),
+                bgcolor="#1a1a50", border_radius=8,
+                margin=ft.margin.only(top=6),
+                content=ft.Row([
+                    ft.Text(cat, size=15, color="#00e5ff",
+                            weight=ft.FontWeight.BOLD, expand=True),
+                    ft.Text(f"{n_found}/{n_total}", size=13,
+                            color="#00ff88" if n_found == n_total else "#ffd700"),
+                ]),
+            ))
+
+            if found_here:
+                for w in sorted(found_here):
+                    sections.append(ft.Container(
+                        width=320,
+                        padding=ft.padding.only(left=22, right=10, top=3, bottom=3),
+                        content=ft.Row([
+                            ft.Text("✓", color="#00ff88", size=13, width=18),
+                            ft.Text(w.capitalize(), width=105, color="#ffd700",
+                                    weight=ft.FontWeight.BOLD, size=13),
+                            ft.Text(f"→  {TRANSLATIONS.get(w,'')}", color="#ffffff", size=13),
+                        ], tight=True),
+                    ))
+            else:
+                sections.append(ft.Container(
+                    width=320,
+                    padding=ft.padding.only(left=22, top=3, bottom=3),
+                    content=ft.Text("(ninguna encontrada aún)", size=12,
+                                    color="#44ffffff"),
+                ))
 
         page.controls.clear()
         page.add(ft.Container(
             expand=True, bgcolor="#0d0d2b",
             content=ft.Column([
                 ft.Container(height=24),
-                ft.Text(" Palabras Encontradas", size=22, color="#00e5ff",
+                ft.Text("📚 Palabras Encontradas", size=22, color="#00e5ff",
                         weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+                ft.Text(f"{len(found_set)} de {total_words} totales",
+                        size=13, color="#88ffffff", text_align=ft.TextAlign.CENTER),
+                ft.Container(height=8),
+                ft.Container(
+                    width=340, height=460,
+                    content=ft.Column(sections, scroll=ft.ScrollMode.AUTO, spacing=0),
+                ),
                 ft.Container(height=12),
-                ft.Container(body, width=320, padding=10),
-                ft.Container(height=20),
                 ft.ElevatedButton("← Volver al menú", width=220,
                     style=ft.ButtonStyle(
                         bgcolor="#22ffffff", color="#ffffff",
