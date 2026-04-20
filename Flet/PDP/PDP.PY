@@ -1,4 +1,4 @@
-#v1.12
+#v1.16
 #Jared Hdz Ctr "Pandajar"
 #python 3.14
 
@@ -59,7 +59,7 @@ JUMP         = -15.0
 SPEED        = 5
 TICK         = 0.032
 
-# ─── MAIN 
+# ══════════════════════════════════════════════════════════════════════════════
 def main(page: ft.Page):
     page.title            = "Home Jump"
     page.bgcolor          = "#0d0d2b"
@@ -70,11 +70,12 @@ def main(page: ft.Page):
 
     record = load_record()
 
-    # scene: "menu" | "playing" | "over" | "restart"
-    scene = {"v": "menu"}
-    gs    = {}
+    # ── Comunicación hilo-loop ↔ hilo-UI
+    cmd         = {"v": None}
+    loop_paused = threading.Event()
+    gs          = {}
 
-    # ── state reset
+    # ── state
     def reset_gs():
         gs.update({
             "px": float(W // 2 - PW // 2),
@@ -84,12 +85,13 @@ def main(page: ft.Page):
             "platforms": [], "letters": [],
             "target": None, "tidx": 0,
             "collected": [], "found": [], "notif": None,
+            "over": False,
         })
 
     def pick_target():
         rem = [w for w in ALL_WORDS if w not in gs["found"]] or ALL_WORDS[:]
         gs["target"] = random.choice(rem)
-        gs["tidx"] = 0
+        gs["tidx"]   = 0
         gs["collected"] = []
 
     # ── platforms
@@ -119,7 +121,7 @@ def main(page: ft.Page):
         gs["platforms"] = [p for p in gs["platforms"] if p["wy"] < limit]
         gs["letters"]   = [l for l in gs["letters"]   if l["wy"]  < limit]
 
-    # ── physics 
+    # ── physics
     def step():
         if gs["left"]:  gs["px"] -= SPEED
         if gs["right"]: gs["px"] += SPEED
@@ -171,7 +173,7 @@ def main(page: ft.Page):
             do_end_game()
 
     def do_end_game():
-        scene["v"] = "over"
+        gs["over"] = True
         record["total_games"] = record.get("total_games", 0) + 1
         if gs["score"] > record["best_height"]:
             record["best_height"] = gs["score"]
@@ -180,21 +182,18 @@ def main(page: ft.Page):
                 record["words_found"].append(w)
         save_record(record)
 
-    # ── render 
-    # game_stack is the ONLY thing we ever touch for rendering.
-    # No page.overlay, no AlertDialog.
+    # ── render
     game_stack = ft.Stack(width=W, height=H, clip_behavior=ft.ClipBehavior.HARD_EDGE)
 
-    def render(is_over=False):
+    def render():
+        is_over = gs.get("over", False)
         items = []
 
-        # background
         items.append(ft.Container(width=W, height=H,
             gradient=ft.LinearGradient(
                 begin=ft.alignment.top_center, end=ft.alignment.bottom_center,
                 colors=["#0d0d2b", "#141450"])))
 
-        # platforms
         for p in gs["platforms"]:
             sy = p["wy"] - gs["cam"]
             if -PLATH-4 < sy < H+PLATH:
@@ -207,7 +206,6 @@ def main(page: ft.Page):
                 items.append(ft.Container(left=p["wx"]+4, top=sy+2,
                     width=p["w"]-8, height=3, bgcolor="#66ffffff", border_radius=2))
 
-        # letters
         for l in gs["letters"]:
             sy = l["wy"] - gs["cam"]
             if -30 < sy < H+30:
@@ -218,7 +216,6 @@ def main(page: ft.Page):
                     content=ft.Text(l["char"], size=17, color="#ffd700",
                                     weight=ft.FontWeight.BOLD)))
 
-        # player
         items.append(ft.Container(
             left=gs["px"], top=gs["py"], width=PW, height=PH,
             bgcolor="#ffffff", border_radius=6,
@@ -233,7 +230,6 @@ def main(page: ft.Page):
             ], spacing=0),
         ))
 
-        # HUD
         items.append(ft.Container(left=8, top=6, content=ft.Column([
             ft.Text(f"Altura: {gs['score']}", size=15, color="#ffffff",
                     weight=ft.FontWeight.BOLD),
@@ -245,7 +241,6 @@ def main(page: ft.Page):
                 content=ft.Text(f"✓ {len(gs['found'])}", size=13,
                                 color="#00ff88", weight=ft.FontWeight.BOLD)))
 
-        # target word bar
         if gs["target"]:
             tw   = gs["target"]
             disp = " ".join(c if i < gs["tidx"] else "_" for i, c in enumerate(tw))
@@ -257,7 +252,6 @@ def main(page: ft.Page):
                             color="#aaffffff", text_align=ft.TextAlign.CENTER),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=1)))
 
-        # notification
         if gs["notif"]:
             items.append(ft.Container(left=0, top=H//2-30, width=W,
                 content=ft.Row([ft.Container(
@@ -268,67 +262,50 @@ def main(page: ft.Page):
                                     color="#00ff88", weight=ft.FontWeight.BOLD),
                 )], alignment=ft.MainAxisAlignment.CENTER)))
 
-        # ── GAME OVER overlay — drawn directly in the stack, no dialog 
         if is_over:
-            # dark tint
-            items.append(ft.Container(width=W, height=H, bgcolor="#cc000015"))
-
-            word_rows = []
-            for w in gs["found"][:6]:
-                word_rows.append(ft.Row([
+            items.append(ft.Container(width=W, height=H, bgcolor="#bb000020"))
+            word_rows = [
+                ft.Row([
                     ft.Text(w.capitalize(), width=110, color="#ffd700",
                             size=13, weight=ft.FontWeight.BOLD),
                     ft.Text(f"→  {TRANSLATIONS.get(w,'')}", color="#ffffff", size=13),
-                ], tight=True))
-
+                ], tight=True)
+                for w in gs["found"][:6]
+            ]
             items.append(ft.Container(
                 left=W//2 - 145, top=H//2 - 160,
-                width=290,
-                bgcolor="#f00d0d2b",   # near-opaque dark bg
-                border_radius=16,
-                border=ft.border.all(2, "#00e5ff"),
+                width=290, bgcolor="#f00d0d2b",
+                border_radius=16, border=ft.border.all(2, "#00e5ff"),
                 padding=18,
                 content=ft.Column([
                     ft.Text("GAME OVER", size=30, color="#ff4444",
                             weight=ft.FontWeight.BOLD,
                             text_align=ft.TextAlign.CENTER),
                     ft.Container(height=2),
-                    ft.Text(f"  Altura: {gs['score']}",
-                            size=16, color="#ffffff",
-                            text_align=ft.TextAlign.CENTER),
-                    ft.Text(f"  Palabras: {len(gs['found'])}",
-                            size=14, color="#00ff88",
-                            text_align=ft.TextAlign.CENTER),
-                    ft.Container(
-                        content=ft.Column(word_rows, spacing=3),
-                        visible=len(word_rows) > 0,
-                        padding=ft.padding.symmetric(vertical=4)),
+                    ft.Text(f"  Altura: {gs['score']}", size=16,
+                            color="#ffffff", text_align=ft.TextAlign.CENTER),
+                    ft.Text(f"  Palabras: {len(gs['found'])}", size=14,
+                            color="#00ff88", text_align=ft.TextAlign.CENTER),
+                    ft.Container(content=ft.Column(word_rows, spacing=3),
+                                 visible=len(word_rows) > 0,
+                                 padding=ft.padding.symmetric(vertical=4)),
                     ft.Container(height=4),
-                    # REINICIAR button — sets scene to "restart", render loop handles it
-                    ft.ElevatedButton(
-                        "▶  REINICIAR",
-                        width=200,
+                    ft.ElevatedButton("▶  REINICIAR", width=200,
                         style=ft.ButtonStyle(
                             bgcolor="#00e5ff", color="#000000",
                             text_style=ft.TextStyle(size=16, weight=ft.FontWeight.BOLD),
-                            shape=ft.RoundedRectangleBorder(radius=10),
-                        ),
-                        on_click=lambda _: do_restart(),
+                            shape=ft.RoundedRectangleBorder(radius=10)),
+                        on_click=lambda _: btn_restart(),
                     ),
                     ft.Container(height=2),
-                    ft.OutlinedButton(
-                        "  Ir al menú",
-                        width=200,
-                        style=ft.ButtonStyle(
-                            color="#00e5ff",
+                    ft.OutlinedButton("  Ir al menú", width=200,
+                        style=ft.ButtonStyle(color="#00e5ff",
                             side=ft.BorderSide(1,"#00e5ff"),
-                            shape=ft.RoundedRectangleBorder(radius=10),
-                        ),
+                            shape=ft.RoundedRectangleBorder(radius=10)),
                         on_click=lambda _: show_menu(),
                     ),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=7, tight=True),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                   spacing=7, tight=True),
             ))
 
         game_stack.controls = items
@@ -337,52 +314,62 @@ def main(page: ft.Page):
         except Exception:
             pass
 
-    # ── actions called by buttons
-    def do_restart():
-        """Button in the in-stack game-over overlay."""
-        scene["v"] = "restart"
+    # ── LOOP
+    running = {"v": True}
 
-    # ── single persistent loop
     def game_loop():
-        while True:
-            s = scene["v"]
+        playing = False
+        while running["v"]:
+            c = cmd["v"]
 
-            if s == "playing":
-                step()
-                render(is_over=False)
-                time.sleep(TICK)
+            if c == "start":
+                cmd["v"] = None
+                playing = True
+                loop_paused.clear()
 
-            elif s == "over":
-                # Render the game-over overlay on top of the frozen frame
-                render(is_over=True)
-                time.sleep(0.1)
+            elif c == "stop":
+                cmd["v"] = None
+                playing = False
+                loop_paused.set()
 
-            elif s == "restart":
-                # Full reset — no sleep on UI thread, everything here
-                reset_gs()
-                gen_platforms()
-                pick_target()
-                render(is_over=False)   # draw first clean frame
-                scene["v"] = "playing"
-
-            else:  # "menu"
-                time.sleep(0.1)
+            if playing:
+                if gs.get("over"):
+                    render()
+                    time.sleep(0.1)
+                else:
+                    step()
+                    render()
+                    time.sleep(TICK)
+            else:
+                time.sleep(0.05)
 
     threading.Thread(target=game_loop, daemon=True).start()
 
-    # ── keyboard 
+    # ── btn_restart  — sin deadlock, sin tocar page.controls
+    #
+    # En game-over el loop sigue corriendo (playing=True) pero solo hace
+    # render()+sleep(0.1). game_stack ya está en pantalla, no hay que
+    # reconstruir la página. Con resetear gs basta: el loop ve over=False
+    # en el siguiente tick y retoma step()+render() normalmente.
+    def btn_restart():
+        reset_gs()
+        gen_platforms()
+        pick_target()
+        cmd["v"] = "start"   # por si el loop fue detenido (ej: venía del menú)
+
+    # ── Teclado
     def on_key(e: ft.KeyboardEvent):
-        if scene["v"] == "playing":
+        if not gs.get("over") and cmd["v"] is None:
             if e.key == "Arrow Left":
                 gs["left"] = True; gs["right"] = False
             elif e.key == "Arrow Right":
                 gs["right"] = True; gs["left"] = False
-        elif scene["v"] == "over" and e.key == " ":
-            do_restart()
+        elif gs.get("over") and e.key == " ":
+            btn_restart()
 
     page.on_keyboard_event = on_key
 
-    # ── game screen (static chrome, stack is reused)
+    # ── show_game
     def show_game():
         page.controls.clear()
         page.add(ft.Column([
@@ -394,8 +381,10 @@ def main(page: ft.Page):
                     ft.GestureDetector(
                         content=ft.Container(
                             width=130, height=86, bgcolor="#1a1a40",
-                            border_radius=ft.border_radius.only(top_right=14, bottom_right=14),
-                            content=ft.Icon(ft.Icons.ARROW_BACK_IOS_NEW, color="#00e5ff", size=36),
+                            border_radius=ft.border_radius.only(
+                                top_right=14, bottom_right=14),
+                            content=ft.Icon(ft.Icons.ARROW_BACK_IOS_NEW,
+                                            color="#00e5ff", size=36),
                             alignment=ft.alignment.center,
                         ),
                         on_tap_down=lambda _: gs.update({"left":True,  "right":False}),
@@ -412,8 +401,10 @@ def main(page: ft.Page):
                     ft.GestureDetector(
                         content=ft.Container(
                             width=130, height=86, bgcolor="#1a1a40",
-                            border_radius=ft.border_radius.only(top_left=14, bottom_left=14),
-                            content=ft.Icon(ft.Icons.ARROW_FORWARD_IOS, color="#00e5ff", size=36),
+                            border_radius=ft.border_radius.only(
+                                top_left=14, bottom_left=14),
+                            content=ft.Icon(ft.Icons.ARROW_FORWARD_IOS,
+                                            color="#00e5ff", size=36),
                             alignment=ft.alignment.center,
                         ),
                         on_tap_down=lambda _: gs.update({"right":True, "left":False}),
@@ -425,16 +416,17 @@ def main(page: ft.Page):
         ], spacing=0))
         page.update()
 
+    # ── start_game
     def start_game():
         reset_gs()
         gen_platforms()
         pick_target()
         show_game()
-        scene["v"] = "playing"
+        cmd["v"] = "start"
 
-    # ── menu
+    # ── show_menu
     def show_menu():
-        scene["v"] = "menu"
+        cmd["v"] = "stop"
         page.controls.clear()
         page.add(ft.Container(
             expand=True,
@@ -489,14 +481,13 @@ def main(page: ft.Page):
         page.update()
 
     def show_words_inline():
-        """Show found words inside the menu (no overlay/dialog)."""
         words = record.get("words_found", [])
         if not words:
-            rows_content = ft.Text("Aún no has encontrado palabras.",
-                                   color="#ffffff", size=14,
-                                   text_align=ft.TextAlign.CENTER)
+            body = ft.Text("Aún no has encontrado palabras.",
+                           color="#ffffff", size=14,
+                           text_align=ft.TextAlign.CENTER)
         else:
-            rows_content = ft.Column([
+            body = ft.Column([
                 ft.Row([
                     ft.Text(w.capitalize(), width=120, color="#ffd700",
                             weight=ft.FontWeight.BOLD, size=14),
@@ -513,7 +504,7 @@ def main(page: ft.Page):
                 ft.Text(" Palabras Encontradas", size=22, color="#00e5ff",
                         weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
                 ft.Container(height=12),
-                ft.Container(rows_content, width=320, padding=10),
+                ft.Container(body, width=320, padding=10),
                 ft.Container(height=20),
                 ft.ElevatedButton("← Volver al menú", width=220,
                     style=ft.ButtonStyle(
