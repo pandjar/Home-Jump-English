@@ -1,0 +1,94 @@
+Bathroom (Baño)
+Shower: Ducha
+
+Bathtub: Bañera (a veces abreviado como bath)
+
+Toilet: Inodoro / Váter
+
+Sink: Lavabo
+
+Mirror: Espejo
+
+Towel: Toalla
+
+Toothbrush: Cepillo de dientes
+
+
+Kitchen (Cocina)
+
+Fridge (Refrigerator): Nevera / Refrigerador
+
+Stove: Estufa / Fogones
+
+Oven: Horno
+
+Microwave: Microondas
+
+Dishwasher: Lavavajillas
+
+Cupboard: Alacena / Armario de cocina
+
+Countertop: Encimera / Mesón
+
+
+
+Living Room (Sala de estar)
+
+Sofa / Couch: Sofá
+
+Armchair: Sillón
+
+Coffee table: Mesa de centro
+
+TV stand: Mueble de televisión
+
+Rug: Alfombra (pequeña o decorativa)
+
+Bookshelf: Estantería de libros
+
+Curtains: Cortinas
+
+
+
+
+Bedroom (Dormitorio)
+
+Bed: Cama
+
+Pillow: Almohada
+
+Wardrobe / Closet: Armario / Ropero
+
+Nightstand: Mesita de noche
+
+Lamp: Lámpara
+
+Blanket: Manta / Cobija
+
+Hanger: Percha / Gancho
+
+Dining Room (Comedor)
+
+Dining table: Mesa de comedor
+
+Chair: Silla
+
+Tablecloth: Mantel
+
+Silverware / Cutlery: Cubiertos
+
+Plate: Plato
+
+Glass: Vaso
+
+Laundry Room (Lavadero / Cuarto de lavado)
+
+Washing machine: Lavadora
+
+Dryer: Secadora
+
+Iron: Plancha
+
+Ironing board: Tabla de planchar
+
+Laundry basket: Cesta de la ropa sucia
