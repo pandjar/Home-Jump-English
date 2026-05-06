@@ -1,4 +1,4 @@
-#v1.18
+#v1.19
 #Jared Hdz Ctr "Pandajar"
 #python 3.14
 
@@ -8,6 +8,12 @@ import json
 import os
 import time
 import threading
+
+ANIMATION_FPS  = 10
+TIME_PER_FRAME = 1.0 / ANIMATION_FPS
+
+# ── FIX ASSETS: rutas sin el prefijo "assets/" porque ft.app recibe assets_dir="assets"
+SECUENCIA_OJOS = [f"ojos_{i}.png" for i in range(30)]
 
 # ─── VOCABULARY
 VOCABULARY = {
@@ -57,7 +63,7 @@ GRAVITY      = 0.58
 JUMP         = -15.0
 SPEED        = 5
 TICK         = 0.032
-BALL_R       = 10   # radio bolitas rojas
+BALL_R       = 10
 
 # ══════════════════════════════════════════════════════════════════════════════
 def main(page: ft.Page):
@@ -71,7 +77,9 @@ def main(page: ft.Page):
     record      = load_record()
     cmd         = {"v": None}
     loop_paused = threading.Event()
-    gs          = {}
+    gs          = {
+        "anim": {"index": 0, "last_time": 0, "complete": False}
+    }
 
     sel_cats = {"v": list(VOCABULARY.keys())}
 
@@ -127,18 +135,14 @@ def main(page: ft.Page):
             wx    = random.randint(10, W - PLATW - 10)
             ptype = _rand_type()
             gs["platforms"].append({"wx": wx, "wy": top, "w": PLATW, "type": ptype})
-
             if gs["target"] and random.random() < 0.60:
                 tw  = gs["target"]
                 idx = gs["tidx"] % len(tw)
                 gs["letters"].append({"wx": wx + PLATW // 2 - 9,
                                       "wy": top - 34,
                                       "char": tw[idx], "lidx": idx})
-
-            # 5 % de probabilidad → bolita roja flotando
             if random.random() < 0.05:
                 _spawn_ball(top - 40)
-
         limit = gs["cam"] + H + 300
         gs["platforms"] = [p for p in gs["platforms"] if p["wy"] < limit]
         gs["letters"]   = [l for l in gs["letters"]   if l["wy"] < limit]
@@ -170,24 +174,17 @@ def main(page: ft.Page):
             gs["py"]  += d
             gs["score"] = max(gs["score"], int(-gs["cam"] / 10))
 
-        # ── mover bolitas + colisión
         for b in gs["balls"]:
             b["wx"] += b["vx"]
             if b["wx"] <= BALL_R:
-                b["wx"] = float(BALL_R)
-                b["vx"] = abs(b["vx"])
+                b["wx"] = float(BALL_R);  b["vx"] = abs(b["vx"])
             elif b["wx"] >= W - BALL_R:
-                b["wx"] = float(W - BALL_R)
-                b["vx"] = -abs(b["vx"])
-
-            # círculo vs rectángulo (coordenadas pantalla)
-            bsx = b["wx"]
-            bsy = b["wy"] - gs["cam"]
+                b["wx"] = float(W - BALL_R); b["vx"] = -abs(b["vx"])
+            bsx = b["wx"]; bsy = b["wy"] - gs["cam"]
             cx  = max(gs["px"], min(bsx, gs["px"] + PW))
             cy  = max(gs["py"], min(bsy, gs["py"] + PH))
             if (bsx - cx) ** 2 + (bsy - cy) ** 2 <= BALL_R ** 2:
-                do_end_game()
-                return
+                do_end_game(); return
 
         wpy = gs["py"] + gs["cam"]
         keep = []
@@ -212,7 +209,6 @@ def main(page: ft.Page):
                 gs["notif"] = None
 
         extend_platforms()
-
         if gs["py"] > H + 90:
             do_end_game()
 
@@ -234,59 +230,45 @@ def main(page: ft.Page):
         is_paused = gs.get("paused", False)
         items     = []
 
-        # Fondo
         items.append(ft.Container(width=W, height=H,
             gradient=ft.LinearGradient(
                 begin=ft.alignment.top_center, end=ft.alignment.bottom_center,
                 colors=["#0d0d2b", "#141450"])))
 
-        # Plataformas
         for p in gs["platforms"]:
             sy = p["wy"] - gs["cam"]
             if -PLATH - 4 < sy < H + PLATH:
                 col  = "#ff6b35" if p["type"] == "bouncy" else "#00e5ff"
                 gcol = "#22ff6b35" if p["type"] == "bouncy" else "#2200e5ff"
-                items.append(ft.Container(left=p["wx"] - 3, top=sy - 3,
-                    width=p["w"] + 6, height=PLATH + 6, bgcolor=gcol, border_radius=5))
+                items.append(ft.Container(left=p["wx"]-3, top=sy-3,
+                    width=p["w"]+6, height=PLATH+6, bgcolor=gcol, border_radius=5))
                 items.append(ft.Container(left=p["wx"], top=sy,
                     width=p["w"], height=PLATH, bgcolor=col, border_radius=3))
-                items.append(ft.Container(left=p["wx"] + 4, top=sy + 2,
-                    width=p["w"] - 8, height=3, bgcolor="#66ffffff", border_radius=2))
+                items.append(ft.Container(left=p["wx"]+4, top=sy+2,
+                    width=p["w"]-8, height=3, bgcolor="#66ffffff", border_radius=2))
 
-        # Bolitas rojas
         for b in gs["balls"]:
             bsy = b["wy"] - gs["cam"]
             if -BALL_R - 4 < bsy < H + BALL_R:
                 d = BALL_R * 2
-                # halo
-                items.append(ft.Container(
-                    left=b["wx"] - BALL_R - 4, top=bsy - BALL_R - 4,
-                    width=d + 8, height=d + 8,
-                    bgcolor="#33ff0000", border_radius=BALL_R + 4))
-                # bola
-                items.append(ft.Container(
-                    left=b["wx"] - BALL_R, top=bsy - BALL_R,
-                    width=d, height=d,
-                    bgcolor="#ff2222", border_radius=BALL_R,
+                items.append(ft.Container(left=b["wx"]-BALL_R-4, top=bsy-BALL_R-4,
+                    width=d+8, height=d+8, bgcolor="#33ff0000", border_radius=BALL_R+4))
+                items.append(ft.Container(left=b["wx"]-BALL_R, top=bsy-BALL_R,
+                    width=d, height=d, bgcolor="#ff2222", border_radius=BALL_R,
                     border=ft.border.all(2, "#ff7777")))
-                # brillo
-                items.append(ft.Container(
-                    left=b["wx"] - BALL_R + 3, top=bsy - BALL_R + 3,
-                    width=5, height=5,
-                    bgcolor="#ffbbbb", border_radius=3))
+                items.append(ft.Container(left=b["wx"]-BALL_R+3, top=bsy-BALL_R+3,
+                    width=5, height=5, bgcolor="#ffbbbb", border_radius=3))
 
-        # Letras
         for l in gs["letters"]:
             sy = l["wy"] - gs["cam"]
             if -30 < sy < H + 30:
-                items.append(ft.Container(left=l["wx"] - 5, top=sy - 5,
+                items.append(ft.Container(left=l["wx"]-5, top=sy-5,
                     width=30, height=30, bgcolor="#55ffd700",
                     border_radius=15, border=ft.border.all(1, "#ffd700")))
-                items.append(ft.Container(left=l["wx"] + 1, top=sy - 1,
+                items.append(ft.Container(left=l["wx"]+1, top=sy-1,
                     content=ft.Text(l["char"], size=17, color="#ffd700",
                                     weight=ft.FontWeight.BOLD)))
 
-        # Jugador
         items.append(ft.Container(
             left=gs["px"], top=gs["py"], width=PW, height=PH,
             bgcolor="#ffffff", border_radius=6,
@@ -301,7 +283,6 @@ def main(page: ft.Page):
             ], spacing=0),
         ))
 
-        # HUD — puntuación
         items.append(ft.Container(left=8, top=6, content=ft.Column([
             ft.Text(f"Altura: {gs['score']}", size=15, color="#ffffff",
                     weight=ft.FontWeight.BOLD),
@@ -316,7 +297,7 @@ def main(page: ft.Page):
         if gs["target"]:
             tw   = gs["target"]
             disp = " ".join(c if i < gs["tidx"] else "_" for i, c in enumerate(tw))
-            items.append(ft.Container(left=0, top=H - 58, width=W, bgcolor="#22000000",
+            items.append(ft.Container(left=0, top=H-58, width=W, bgcolor="#22000000",
                 content=ft.Column([
                     ft.Text(f"Forma:  {disp}", size=15, color="#ffd700",
                             weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
@@ -325,7 +306,7 @@ def main(page: ft.Page):
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=1)))
 
         if gs["notif"]:
-            items.append(ft.Container(left=0, top=H // 2 - 30, width=W,
+            items.append(ft.Container(left=0, top=H//2-30, width=W,
                 content=ft.Row([ft.Container(
                     padding=ft.padding.symmetric(horizontal=16, vertical=8),
                     bgcolor="#cc003322", border_radius=12,
@@ -334,11 +315,10 @@ def main(page: ft.Page):
                                     color="#00ff88", weight=ft.FontWeight.BOLD),
                 )], alignment=ft.MainAxisAlignment.CENTER)))
 
-        # Panel PAUSA
         if is_paused and not is_over:
             items.append(ft.Container(width=W, height=H, bgcolor="#aa000030"))
             items.append(ft.Container(
-                left=W // 2 - 110, top=H // 2 - 100,
+                left=W//2-110, top=H//2-100,
                 width=220, bgcolor="#ee0d0d2b",
                 border_radius=16, border=ft.border.all(2, "#00e5ff"),
                 padding=22,
@@ -347,25 +327,31 @@ def main(page: ft.Page):
                             weight=ft.FontWeight.BOLD,
                             text_align=ft.TextAlign.CENTER),
                     ft.Container(height=14),
-                    ft.ElevatedButton("▶  Continuar", width=170,
-                        style=ft.ButtonStyle(
-                            bgcolor="#00e5ff", color="#000000",
-                            text_style=ft.TextStyle(size=15, weight=ft.FontWeight.BOLD),
-                            shape=ft.RoundedRectangleBorder(radius=10)),
-                        on_click=lambda _: toggle_pause(),
+                    # ── FIX DELAY: on_tap_down dispara al instante
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: toggle_pause(),
+                        content=ft.Container(
+                            width=170, height=44, border_radius=10,
+                            bgcolor="#00e5ff",
+                            alignment=ft.alignment.center,
+                            content=ft.Text("▶  Continuar", size=15, color="#000000",
+                                            weight=ft.FontWeight.BOLD),
+                        ),
                     ),
                     ft.Container(height=8),
-                    ft.OutlinedButton("🏠  Ir al menú", width=170,
-                        style=ft.ButtonStyle(color="#00e5ff",
-                            side=ft.BorderSide(1, "#00e5ff"),
-                            shape=ft.RoundedRectangleBorder(radius=10)),
-                        on_click=lambda _: show_menu(),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: show_menu(),
+                        content=ft.Container(
+                            width=170, height=44, border_radius=10,
+                            border=ft.border.all(1, "#00e5ff"),
+                            alignment=ft.alignment.center,
+                            content=ft.Text("🏠  Ir al menú", size=15, color="#00e5ff"),
+                        ),
                     ),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                    spacing=4, tight=True),
             ))
 
-        # Panel GAME OVER
         if is_over:
             items.append(ft.Container(width=W, height=H, bgcolor="#bb000020"))
             word_rows = [
@@ -377,7 +363,7 @@ def main(page: ft.Page):
                 for w in gs["found"][:6]
             ]
             items.append(ft.Container(
-                left=W // 2 - 145, top=H // 2 - 160,
+                left=W//2-145, top=H//2-160,
                 width=290, bgcolor="#f00d0d2b",
                 border_radius=16, border=ft.border.all(2, "#00e5ff"),
                 padding=18,
@@ -394,19 +380,26 @@ def main(page: ft.Page):
                                  visible=len(word_rows) > 0,
                                  padding=ft.padding.symmetric(vertical=4)),
                     ft.Container(height=4),
-                    ft.ElevatedButton("▶  REINICIAR", width=200,
-                        style=ft.ButtonStyle(
-                            bgcolor="#00e5ff", color="#000000",
-                            text_style=ft.TextStyle(size=16, weight=ft.FontWeight.BOLD),
-                            shape=ft.RoundedRectangleBorder(radius=10)),
-                        on_click=lambda _: btn_restart(),
+                    # ── FIX DELAY: botones game over también con on_tap_down
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: btn_restart(),
+                        content=ft.Container(
+                            width=200, height=44, border_radius=10,
+                            bgcolor="#00e5ff",
+                            alignment=ft.alignment.center,
+                            content=ft.Text("▶  REINICIAR", size=16, color="#000000",
+                                            weight=ft.FontWeight.BOLD),
+                        ),
                     ),
                     ft.Container(height=2),
-                    ft.OutlinedButton("🏠  Ir al menú", width=200,
-                        style=ft.ButtonStyle(color="#00e5ff",
-                            side=ft.BorderSide(1, "#00e5ff"),
-                            shape=ft.RoundedRectangleBorder(radius=10)),
-                        on_click=lambda _: show_menu(),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: show_menu(),
+                        content=ft.Container(
+                            width=200, height=44, border_radius=10,
+                            border=ft.border.all(1, "#00e5ff"),
+                            alignment=ft.alignment.center,
+                            content=ft.Text("🏠  Ir al menú", size=15, color="#00e5ff"),
+                        ),
                     ),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                    spacing=7, tight=True),
@@ -421,28 +414,52 @@ def main(page: ft.Page):
     # ── LOOP ─────────────────────────────────────────────────────────────────
     running = {"v": True}
 
+    # ── Controles de animación del menú (creados una sola vez)
+    eyes_img   = ft.Image(src=SECUENCIA_OJOS[0], width=160, height=160,
+                          opacity=1, animate_opacity=800)
+    text_home  = ft.Text("HOME", size=54, weight=ft.FontWeight.BOLD,
+                         color="#00e5ff", opacity=0, animate_opacity=800)
+    text_jump  = ft.Text("JUMP", size=54, weight=ft.FontWeight.BOLD,
+                         color="#ffd700", opacity=0, animate_opacity=800)
+
     def game_loop():
         playing = False
         while running["v"]:
             c = cmd["v"]
             if c == "start":
-                cmd["v"] = None
-                playing  = True
-                loop_paused.clear()
+                cmd["v"] = None; playing = True; loop_paused.clear()
             elif c == "stop":
-                cmd["v"] = None
-                playing  = False
-                loop_paused.set()
+                cmd["v"] = None; playing = False; loop_paused.set()
 
             if playing:
                 if gs.get("over") or gs.get("paused"):
-                    render()
-                    time.sleep(0.1)
+                    render(); time.sleep(0.1)
                 else:
-                    step()
-                    render()
-                    time.sleep(TICK)
+                    step(); render(); time.sleep(TICK)
             else:
+                # Animación de ojos en el menú
+                if not gs["anim"]["complete"]:
+                    now = time.time()
+                    if gs["anim"]["last_time"] == 0:
+                        gs["anim"]["last_time"] = now
+                    if now - gs["anim"]["last_time"] >= TIME_PER_FRAME:
+                        gs["anim"]["index"]     += 1
+                        gs["anim"]["last_time"]  = now
+                        idx = gs["anim"]["index"]
+                        if idx < len(SECUENCIA_OJOS):
+                            eyes_img.src = SECUENCIA_OJOS[idx]
+                            try: eyes_img.update()
+                            except Exception: pass
+                        else:
+                            gs["anim"]["complete"]    = True
+                            eyes_img.opacity          = 0
+                            text_home.opacity         = 1
+                            text_jump.opacity         = 1
+                            try:
+                                eyes_img.update()
+                                text_home.update()
+                                text_jump.update()
+                            except Exception: pass
                 time.sleep(0.05)
 
     threading.Thread(target=game_loop, daemon=True).start()
@@ -453,15 +470,12 @@ def main(page: ft.Page):
             gs["paused"] = not gs.get("paused", False)
 
     def btn_restart():
-        reset_gs()
-        gen_platforms()
-        pick_target()
+        reset_gs(); gen_platforms(); pick_target()
         cmd["v"] = "start"
 
     def on_key(e: ft.KeyboardEvent):
         if gs.get("over"):
-            if e.key == " ":
-                btn_restart()
+            if e.key == " ": btn_restart()
         elif e.key in ("Escape", "P", "p"):
             toggle_pause()
         elif not gs.get("paused"):
@@ -472,80 +486,75 @@ def main(page: ft.Page):
 
     page.on_keyboard_event = on_key
 
-   # ── show_game ─────────────────────────────────────────────────────────────
+    # ── show_game ─────────────────────────────────────────────────────────────
     def show_game():
         page.controls.clear()
         page.add(ft.Column([
-            game_stack, # Área del juego
+            game_stack,
             ft.Container(
-                height=100, 
-                bgcolor="#0a0a22",
+                height=100, bgcolor="#0a0a22",
                 border=ft.border.only(top=ft.BorderSide(1, "#22ffffff")),
-                # Eliminamos el padding horizontal para que los botones lleguen a los bordes
                 content=ft.Row([
-                    
-                    # BOTÓN IZQUIERDA (Ocupa todo el lado izquierdo)
+
+                    # ◀ Izquierda — on_tap_down: sin delay
                     ft.GestureDetector(
-                        expand=True, # IMPORTANTE: Esto hace que se estire al máximo
-                        mouse_cursor=ft.MouseCursor.CLICK,
+                        expand=True,
                         content=ft.Container(
-                            height=100, # Mismo alto que el contenedor padre
-                            bgcolor="#1a1a40",
+                            height=100, bgcolor="#1a1a40",
                             alignment=ft.alignment.center,
-                            # Bordes rectos en el centro y redondeados en la esquina exterior
-                            border_radius=ft.border_radius.only(top_right=20, bottom_right=20),
-                            content=ft.Icon(ft.Icons.ARROW_BACK_IOS_NEW, color="#00e5ff", size=45),
+                            border_radius=ft.border_radius.only(
+                                top_right=20, bottom_right=20),
+                            content=ft.Icon(ft.Icons.ARROW_BACK_IOS_NEW,
+                                            color="#00e5ff", size=45),
                         ),
-                        on_tap_down=lambda _: gs.update({"left": True, "right": False}),
-                        on_tap_up=lambda _: gs.update({"left": False}),
+                        on_tap_down=lambda _: gs.update({"left": True,  "right": False}),
+                        on_tap_up=  lambda _: gs.update({"left": False}),
+                        on_pan_end= lambda _: gs.update({"left": False}),
                     ),
-                    
-                    # BOTÓN PAUSA (Círculo central flotante)
+
+                    # ⏸ Pausa — on_tap_down: sin delay
                     ft.GestureDetector(
-                        mouse_cursor=ft.MouseCursor.CLICK,
                         content=ft.Container(
-                            width=90, 
-                            height=90,
+                            width=90, height=90,
                             bgcolor="#0f0f2e",
                             alignment=ft.alignment.center,
-                            shape=ft.BoxShape.CIRCLE, # Forma circular perfecta
+                            shape=ft.BoxShape.CIRCLE,
                             border=ft.border.all(2, "#33ffffff"),
                             content=ft.Column([
-                                ft.Icon(ft.Icons.PAUSE_CIRCLE_OUTLINE, color="#00e5ff", size=35),
-                                ft.Text("PAUSA", size=10, color="#44ffffff", weight=ft.FontWeight.BOLD),
+                                ft.Icon(ft.Icons.PAUSE_CIRCLE_OUTLINE,
+                                        color="#00e5ff", size=35),
+                                ft.Text("PAUSA", size=10, color="#44ffffff",
+                                        weight=ft.FontWeight.BOLD),
                             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                alignment=ft.MainAxisAlignment.CENTER, spacing=-2),
                         ),
-                        on_tap=lambda _: toggle_pause(),
+                        on_tap_down=lambda _: toggle_pause(),   # ← sin delay
                     ),
 
-                    # BOTÓN DERECHA (Ocupa todo el lado derecho)
+                    # ▶ Derecha — on_tap_down: sin delay
                     ft.GestureDetector(
-                        expand=True, # IMPORTANTE: Esto hace que se estire al máximo
-                        mouse_cursor=ft.MouseCursor.CLICK,
+                        expand=True,
                         content=ft.Container(
-                            height=100, 
-                            bgcolor="#1a1a40",
+                            height=100, bgcolor="#1a1a40",
                             alignment=ft.alignment.center,
-                            # Bordes rectos en el centro y redondeados en la esquina exterior
-                            border_radius=ft.border_radius.only(top_left=20, bottom_left=20),
-                            content=ft.Icon(ft.Icons.ARROW_FORWARD_IOS, color="#00e5ff", size=45),
+                            border_radius=ft.border_radius.only(
+                                top_left=20, bottom_left=20),
+                            content=ft.Icon(ft.Icons.ARROW_FORWARD_IOS,
+                                            color="#00e5ff", size=45),
                         ),
                         on_tap_down=lambda _: gs.update({"right": True, "left": False}),
-                        on_tap_up=lambda _: gs.update({"right": False}),
+                        on_tap_up=  lambda _: gs.update({"right": False}),
+                        on_pan_end= lambda _: gs.update({"right": False}),
                     ),
-                ], 
-                spacing=5, # Pequeña separación para que el botón de pausa destaque
-                alignment=ft.MainAxisAlignment.CENTER,
-                expand=True),
+
+                ], spacing=5, alignment=ft.MainAxisAlignment.CENTER, expand=True),
             ),
         ], spacing=0))
         page.update()
+
     # ── start_game ────────────────────────────────────────────────────────────
     def start_game():
-        reset_gs()
-        gen_platforms()
-        pick_target()
+        reset_gs(); gen_platforms(); pick_target()
         show_game()
         cmd["v"] = "start"
 
@@ -565,8 +574,9 @@ def main(page: ft.Page):
             selected = cat in sel_cats["v"]
             words    = VOCABULARY[cat]
             preview  = ", ".join(w.capitalize() for w in words[:3]) + "…"
+            # ── FIX DELAY: on_tap_down en lugar de on_tap
             return ft.GestureDetector(
-                on_tap=lambda _, c=cat: toggle_cat(c),
+                on_tap_down=lambda _, c=cat: toggle_cat(c),
                 content=ft.Container(
                     width=320, padding=9,
                     bgcolor="#22ffffff" if selected else "#0d0d2b",
@@ -604,18 +614,28 @@ def main(page: ft.Page):
                 ft.Container(height=14),
                 *[make_row(cat) for cat in VOCABULARY],
                 ft.Container(height=18),
-                ft.ElevatedButton("▶  JUGAR", width=230, height=52,
-                    style=ft.ButtonStyle(
-                        bgcolor="#00e5ff", color="#000000",
-                        text_style=ft.TextStyle(size=18, weight=ft.FontWeight.BOLD),
-                        shape=ft.RoundedRectangleBorder(radius=12)),
-                    on_click=lambda _: start_game()),
+                # ── FIX DELAY: GestureDetector con on_tap_down en botones de menú
+                ft.GestureDetector(
+                    on_tap_down=lambda _: start_game(),
+                    content=ft.Container(
+                        width=230, height=52, border_radius=12,
+                        bgcolor="#00e5ff",
+                        alignment=ft.alignment.center,
+                        content=ft.Text("▶  JUGAR", size=18, color="#000000",
+                                        weight=ft.FontWeight.BOLD),
+                    ),
+                ),
                 ft.Container(height=8),
-                ft.OutlinedButton("← Volver al menú", width=200,
-                    style=ft.ButtonStyle(color="#88ffffff",
-                        side=ft.BorderSide(1, "#44ffffff"),
-                        shape=ft.RoundedRectangleBorder(radius=10)),
-                    on_click=lambda _: show_menu()),
+                ft.GestureDetector(
+                    on_tap_down=lambda _: show_menu(),
+                    content=ft.Container(
+                        width=200, height=44, border_radius=10,
+                        border=ft.border.all(1, "#44ffffff"),
+                        alignment=ft.alignment.center,
+                        content=ft.Text("← Volver al menú", size=14,
+                                        color="#88ffffff"),
+                    ),
+                ),
                 ft.Container(height=16),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                spacing=8, scroll=ft.ScrollMode.AUTO),
@@ -625,6 +645,23 @@ def main(page: ft.Page):
     # ── Menú principal ────────────────────────────────────────────────────────
     def show_menu():
         cmd["v"] = "stop"
+
+        # Reset animación
+        gs["anim"].update({"index": 0, "last_time": 0, "complete": False})
+        eyes_img.opacity  = 1
+        eyes_img.src      = SECUENCIA_OJOS[0]
+        text_home.opacity = 0
+        text_jump.opacity = 0
+
+        title_stack = ft.Stack([
+            ft.Container(content=eyes_img,
+                         alignment=ft.alignment.center, width=W, height=180),
+            ft.Container(
+                content=ft.Column([text_home, text_jump],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=-15),
+                alignment=ft.alignment.center, width=W, height=180),
+        ], width=W, height=180)
+
         total_words = sum(len(v) for v in VOCABULARY.values())
         page.controls.clear()
         page.add(ft.Container(
@@ -634,10 +671,7 @@ def main(page: ft.Page):
                 colors=["#0d0d2b", "#1a1a4e"]),
             content=ft.Column([
                 ft.Container(height=36),
-                ft.Text("HOME", size=54, weight=ft.FontWeight.BOLD,
-                        color="#00e5ff", text_align=ft.TextAlign.CENTER),
-                ft.Text("JUMP", size=54, weight=ft.FontWeight.BOLD,
-                        color="#ffd700", text_align=ft.TextAlign.CENTER),
+                title_stack,
                 ft.Container(height=4),
                 ft.Text("Salta · Recoge letras · Forma palabras en inglés",
                         size=13, color="#88ffffff", text_align=ft.TextAlign.CENTER),
@@ -654,18 +688,28 @@ def main(page: ft.Page):
                                 size=13, color="#aaffffff", text_align=ft.TextAlign.CENTER),
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)),
                 ft.Container(height=22),
-                ft.ElevatedButton("▶  JUGAR", width=230, height=58,
-                    style=ft.ButtonStyle(
-                        bgcolor="#00e5ff", color="#000000",
-                        text_style=ft.TextStyle(size=21, weight=ft.FontWeight.BOLD),
-                        shape=ft.RoundedRectangleBorder(radius=14)),
-                    on_click=lambda _: show_category_select()),
+                # ── FIX DELAY: todos los botones del menú con on_tap_down
+                ft.GestureDetector(
+                    on_tap_down=lambda _: show_category_select(),
+                    content=ft.Container(
+                        width=230, height=58, border_radius=14,
+                        bgcolor="#00e5ff",
+                        alignment=ft.alignment.center,
+                        content=ft.Text("▶  JUGAR", size=21, color="#000000",
+                                        weight=ft.FontWeight.BOLD),
+                    ),
+                ),
                 ft.Container(height=10),
-                ft.OutlinedButton("📖  VER PALABRAS ENCONTRADAS", width=280,
-                    style=ft.ButtonStyle(
-                        color="#00e5ff", side=ft.BorderSide(1, "#00e5ff"),
-                        shape=ft.RoundedRectangleBorder(radius=10)),
-                    on_click=lambda _: show_words_inline()),
+                ft.GestureDetector(
+                    on_tap_down=lambda _: show_words_inline(),
+                    content=ft.Container(
+                        width=280, height=44, border_radius=10,
+                        border=ft.border.all(1, "#00e5ff"),
+                        alignment=ft.alignment.center,
+                        content=ft.Text("📖  VER PALABRAS ENCONTRADAS",
+                                        size=13, color="#00e5ff"),
+                    ),
+                ),
                 ft.Container(height=28),
                 ft.Text("Cómo jugar", size=14, color="#00e5ff",
                         weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
@@ -690,7 +734,6 @@ def main(page: ft.Page):
             found_here = [w for w in words if w in found_set]
             n_found    = len(found_here)
             n_total    = len(words)
-
             sections.append(ft.Container(
                 width=320,
                 padding=ft.padding.symmetric(horizontal=12, vertical=7),
@@ -703,7 +746,6 @@ def main(page: ft.Page):
                             color="#00ff88" if n_found == n_total else "#ffd700"),
                 ]),
             ))
-
             if found_here:
                 for w in sorted(found_here):
                     sections.append(ft.Container(
@@ -739,11 +781,15 @@ def main(page: ft.Page):
                     content=ft.Column(sections, scroll=ft.ScrollMode.AUTO, spacing=0),
                 ),
                 ft.Container(height=12),
-                ft.ElevatedButton("← Volver al menú", width=220,
-                    style=ft.ButtonStyle(
-                        bgcolor="#22ffffff", color="#ffffff",
-                        shape=ft.RoundedRectangleBorder(radius=10)),
-                    on_click=lambda _: show_menu()),
+                ft.GestureDetector(
+                    on_tap_down=lambda _: show_menu(),
+                    content=ft.Container(
+                        width=220, height=44, border_radius=10,
+                        bgcolor="#22ffffff",
+                        alignment=ft.alignment.center,
+                        content=ft.Text("← Volver al menú", size=14, color="#ffffff"),
+                    ),
+                ),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                spacing=0, scroll=ft.ScrollMode.AUTO),
         ))
@@ -752,4 +798,6 @@ def main(page: ft.Page):
     show_menu()
 
 
-ft.app(main)
+# ── FIX ASSETS: assets_dir="assets" → Flet sirve los archivos desde esa carpeta
+# y los src de ft.Image sin prefijo "assets/" funcionan correctamente
+ft.app(main, assets_dir="assets")
