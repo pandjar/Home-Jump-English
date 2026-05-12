@@ -269,19 +269,76 @@ def main(page: ft.Page):
                     content=ft.Text(l["char"], size=17, color="#ffd700",
                                     weight=ft.FontWeight.BOLD)))
 
+        # ── ROBOT CHARACTER (inspirado en la imagen del personaje)
+        px, py = gs["px"], gs["py"]
+
+        # Cuerpo blanco (debajo de la cabeza)
         items.append(ft.Container(
-            left=gs["px"], top=gs["py"], width=PW, height=PH,
-            bgcolor="#ffffff", border_radius=6,
-            border=ft.border.all(2, "#00e5ff"),
-            content=ft.Column([
-                ft.Container(height=4),
-                ft.Row([
-                    ft.Container(width=7, height=7, bgcolor="#000000", border_radius=4),
-                    ft.Container(width=4),
-                    ft.Container(width=7, height=7, bgcolor="#000000", border_radius=4),
-                ], alignment=ft.MainAxisAlignment.CENTER, spacing=0),
-            ], spacing=0),
-        ))
+            left=px + 7, top=py + 19,
+            width=18, height=13,
+            bgcolor="#e8e8e8",
+            border_radius=ft.border_radius.only(bottom_left=6, bottom_right=6),
+            border=ft.border.all(2, "#33ee44")))
+
+        # Brazo izquierdo
+        items.append(ft.Container(
+            left=px - 4, top=py + 19,
+            width=9, height=9,
+            bgcolor="#d8d8d8", border_radius=4,
+            border=ft.border.all(1, "#33ee44")))
+
+        # Brazo derecho
+        items.append(ft.Container(
+            left=px + 27, top=py + 19,
+            width=9, height=9,
+            bgcolor="#d8d8d8", border_radius=4,
+            border=ft.border.all(1, "#33ee44")))
+
+        # Cabeza: oval negra con borde verde neón
+        items.append(ft.Container(
+            left=px, top=py,
+            width=32, height=22,
+            bgcolor="#0a0a0a", border_radius=12,
+            border=ft.border.all(2, "#33ee44")))
+
+        # Ojo izquierdo — oval verde brillante
+        items.append(ft.Container(
+            left=px + 4, top=py + 4,
+            width=10, height=13,
+            bgcolor="#1acc22", border_radius=6,
+            border=ft.border.all(1, "#66ff77")))
+
+        # Ojo derecho — oval verde brillante
+        items.append(ft.Container(
+            left=px + 18, top=py + 4,
+            width=10, height=13,
+            bgcolor="#1acc22", border_radius=6,
+            border=ft.border.all(1, "#66ff77")))
+
+        # Pupila izquierda (punto oscuro interior)
+        items.append(ft.Container(
+            left=px + 7, top=py + 7,
+            width=4, height=6,
+            bgcolor="#003300", border_radius=3))
+
+        # Pupila derecha
+        items.append(ft.Container(
+            left=px + 21, top=py + 7,
+            width=4, height=6,
+            bgcolor="#003300", border_radius=3))
+
+        # Sonrisa (línea verde curva)
+        items.append(ft.Container(
+            left=px + 9, top=py + 18,
+            width=14, height=3,
+            bgcolor="#33ee44", border_radius=2))
+
+        # Cuernito / antena en la cabeza
+        items.append(ft.Container(
+            left=px + 10, top=py - 6,
+            width=5, height=7,
+            bgcolor="#0a0a0a", border_radius=3,
+            border=ft.border.all(1, "#33ee44")))
 
         items.append(ft.Container(left=8, top=6, content=ft.Column([
             ft.Text(f"Altura: {gs['score']}", size=15, color="#ffffff",
