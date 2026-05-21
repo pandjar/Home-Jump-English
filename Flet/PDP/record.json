@@ -1,10 +1,15 @@
 {
-  "best_height": 962,
+  "best_height": 2354,
   "words_found": [
     "IRON",
     "BED",
     "OVEN",
-    "WARDROBE"
+    "WARDROBE",
+    "DISHWASHER",
+    "FRIDGE",
+    "WASHER",
+    "DRYER",
+    "RUG"
   ],
-  "total_games": 49
+  "total_games": 60
 }
