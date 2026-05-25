@@ -1,4 +1,4 @@
-#v1.30.2
+#v1.32.2
 #Jared Hdz Ctr "Pandajar"
 #python 3.14
 
@@ -8,6 +8,7 @@ import json
 import os
 import time
 import threading
+import unicodedata
 
 ANIMATION_FPS  = 10
 TIME_PER_FRAME = 1.0 / ANIMATION_FPS
@@ -80,12 +81,75 @@ def main(page: ft.Page):
 
     # Idle tracker para el menú
     menu_idle  = {"last_action": 0.0, "in_menu": False}
-    menu_state = {"htop": False}   # True = "Cómo jugar" desplegado
+    help_state = {"open": False}
+    review_state = {"open": False, "cards": [], "answers": {}, "error": "", "already_reviewed": False}
 
     sel_cats = {"v": list(VOCABULARY.keys())}
 
     def active_words():
         return [w for cat in sel_cats["v"] for w in VOCABULARY[cat]]
+
+    def normalize_answer(text: str) -> str:
+        value = unicodedata.normalize("NFD", text or "")
+        value = ''.join(ch for ch in value if unicodedata.category(ch) != 'Mn')
+        return value.strip().lower()
+
+    def start_review_session():
+        if review_state["already_reviewed"]:
+            show_category_select()
+            return
+
+        found_words = list(record.get("words_found", []))
+        if not found_words:
+            review_state.update({"open": False, "cards": [], "answers": {}, "error": ""})
+            show_category_select()
+            return
+
+        review_state.update({
+            "open": True,
+            "cards": random.sample(found_words, min(3, len(found_words))),
+            "answers": {},
+            "error": "",
+        })
+        show_menu(False)
+
+    def close_review_modal():
+        review_state["open"] = False
+        review_state["error"] = ""
+        show_category_select()
+
+    def confirm_review_answers():
+        missing = [word for word in review_state["cards"] if not review_state["answers"].get(word, "").strip()]
+        if missing:
+            review_state["error"] = "Completa todas las respuestas para poder jugar."
+            show_menu(False)
+            return
+
+        incorrect = []
+        for word in review_state["cards"]:
+            expected = normalize_answer(TRANSLATIONS.get(word, ""))
+            answer = normalize_answer(review_state["answers"].get(word, ""))
+            if answer != expected:
+                incorrect.append(word)
+
+        if incorrect:
+            review_state["error"] = "Hay respuestas incorrectas. Vuelve a intentarlo."
+            review_state["open"] = True
+            show_menu(False)
+            return
+
+        review_state["open"] = False
+        review_state["error"] = ""
+        review_state["already_reviewed"] = True
+        show_category_select()
+
+    def open_help_modal():
+        help_state["open"] = True
+        show_menu(False)
+
+    def close_help_modal():
+        help_state["open"] = False
+        show_menu(False)
 
     # ── state ────────────────────────────────────────────────────────────────
     def reset_gs():
@@ -339,21 +403,21 @@ def main(page: ft.Page):
                         content=ft.Image(src=img_src, width=48, height=48,
                                          fit=ft.ImageFit.CONTAIN)))
                 else:
-                    # Jetpack: halo naranja, todo centrado en (wx, psy)
-                    items.append(ft.Container(       # halo exterior  84×84
-                        left=pu["wx"] - 42, top=psy - 42,
-                        width=84, height=84,
-                        bgcolor="#44ff7700", border_radius=42))
-                    items.append(ft.Container(       # halo interior  68×68
-                        left=pu["wx"] - 34, top=psy - 34,
-                        width=68, height=68,
-                        bgcolor="#99ff8800", border_radius=34,
+                    # Jetpack: halo naranja más pequeño y circular
+                    items.append(ft.Container(       # halo exterior  70×70
+                        left=pu["wx"] - 35, top=psy - 35,
+                        width=70, height=70,
+                        bgcolor="#44ff7700", border_radius=35))
+                    items.append(ft.Container(       # halo interior  50×50
+                        left=pu["wx"] - 25, top=psy - 25,
+                        width=50, height=50,
+                        bgcolor="#99ff8800", border_radius=25,
                         border=ft.border.all(2, "#ffaa00")))
-                    items.append(ft.Container(       # imagen: mismo tamaño que halo exterior
-                        left=pu["wx"] - 42, top=psy - 42,
-                        width=84, height=84,
+                    items.append(ft.Container(       # imagen: tamaño mayor dentro del halo
+                        left=pu["wx"] - 39, top=psy - 39,
+                        width=78, height=78,
                         alignment=ft.alignment.center,
-                        content=ft.Image(src=img_src, width=72, height=72,
+                        content=ft.Image(src=img_src, width=76, height=76,
                                          fit=ft.ImageFit.CONTAIN)))
 
         # Letras
@@ -526,7 +590,7 @@ def main(page: ft.Page):
             tw   = gs["target"]
             disp = " ".join(c if i < gs["tidx"] else "_"
                             for i, c in enumerate(tw))   # palabra completa
-            items.append(ft.Container(left=0, top=H - 52, width=W, bgcolor="#22000000",
+            items.append(ft.Container(left=0, top=H - 600, width=W, bgcolor="#22000000",
                 content=ft.Column([
                     ft.Text(f"Forma: {disp}", size=16, color="#ffd700",
                             weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
@@ -842,8 +906,10 @@ def main(page: ft.Page):
         ], width=W, height=180)
 
         total_words = sum(len(v) for v in VOCABULARY.values())
-        page.controls.clear()
-        page.add(ft.Container(expand=True,
+
+        base_menu = ft.Container(
+            width=W,
+            height=page.window.height,
             gradient=ft.LinearGradient(
                 begin=ft.alignment.top_center, end=ft.alignment.bottom_center,
                 colors=["#0d0d2b", "#1a1a4e"]),
@@ -868,7 +934,7 @@ def main(page: ft.Page):
                 ft.GestureDetector(
                     on_tap_down=lambda _: (
                         menu_idle.update({"last_action": time.time()}),
-                        show_category_select()
+                        start_review_session()
                     ),
                     content=ft.Container(width=230, height=58, border_radius=14,
                         bgcolor="#00e5ff", alignment=ft.alignment.center,
@@ -882,36 +948,102 @@ def main(page: ft.Page):
                         alignment=ft.alignment.center,
                         content=ft.Text("📖  VER PALABRAS ENCONTRADAS",
                                         size=13, color="#00e5ff"))),
-                ft.Container(height=28),
-                # ── Botón "Cómo jugar" desplegable
+                ft.Container(height=10),
                 ft.GestureDetector(
-                    on_tap_down=lambda _: (
-                        menu_state.update({"htop": not menu_state["htop"]}),
-                        show_menu(False)      # ← False = no reinicia la animación del título
-                    ),
-                    content=ft.Container(
-                        width=260, height=44, border_radius=12,
+                    on_tap_down=lambda _: open_help_modal(),
+                    content=ft.Container(width=260, height=44, border_radius=12,
                         bgcolor="#1a1a4e",
                         border=ft.border.all(2, "#00e5ff"),
                         alignment=ft.alignment.center,
-                        content=ft.Row([
-                            ft.Text("Cómo jugar", size=15, color="#00e5ff",
-                                    weight=ft.FontWeight.BOLD),
-                            ft.Text(
-                                "  ▲" if menu_state["htop"] else "  ▼",
-                                size=15, color="#00e5ff",
-                                weight=ft.FontWeight.BOLD),
-                        ], alignment=ft.MainAxisAlignment.CENTER, spacing=0))),
+                        content=ft.Text("Cómo jugar", size=15, color="#00e5ff",
+                                        weight=ft.FontWeight.BOLD))),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+               spacing=6, scroll=ft.ScrollMode.AUTO))
 
-                # ── Contenido desplegable (visible solo si htop=True)
-                *([ 
+        review_overlay = ft.Container(
+            width=page.window.width, height=page.window.height,
+            bgcolor="#aa000000",
+            alignment=ft.alignment.center,
+            visible=review_state["open"],
+            content=ft.Container(
+                width=330, padding=18,
+                bgcolor="#0d0d2b",
+                border_radius=16,
+                border=ft.border.all(2, "#00e5ff"),
+                content=ft.Column([
+                    ft.Text("📝  Repaso antes de jugar", size=20, color="#ffd700",
+                            weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+                    ft.Text("Escribe la traducción de cada palabra para continuar.",
+                            size=12, color="#88ffffff", text_align=ft.TextAlign.CENTER),
                     ft.Container(height=10),
-                    ft.Text("Las letras doradas aparecen en orden sobre\n"
-                            "las plataformas. ¡Recógelas en secuencia!",
-                            size=12, color="#88ffffff",
-                            text_align=ft.TextAlign.CENTER),
+                    *[
+                        ft.Container(
+                            width=290, padding=12, bgcolor="#111133", border_radius=12,
+                            content=ft.Column([
+                                ft.Text(f"¿Qué significa {word}?", size=14,
+                                        color="#ffffff", weight=ft.FontWeight.BOLD),
+                                ft.TextField(
+                                    value=review_state["answers"].get(word, ""),
+                                    label="Traducción",
+                                    text_style=ft.TextStyle(color="#ffffff"),
+                                    border_color="#00e5ff",
+                                    focused_border_color="#ffd700",
+                                    on_change=lambda e, current_word=word: (
+                                        review_state["answers"].update({current_word: e.data}),
+                                        page.update()
+                                    )),
+                            ], spacing=4, tight=True))
+                        for word in review_state["cards"]
+                    ],
                     ft.Container(height=8),
-                    # Normal / Bouncy
+                    ft.Text(
+                        review_state["error"],
+                        size=12,
+                        color="#ff7777",
+                        visible=bool(review_state["error"]),
+                        text_align=ft.TextAlign.CENTER),
+                    ft.Container(height=10),
+                    ft.Column([
+                        ft.Container(
+                            width=290,
+                            alignment=ft.alignment.center,
+                            content=ft.GestureDetector(
+                                on_tap_down=lambda _: show_words_inline(),
+                                content=ft.Container(width=250, height=44, border_radius=10,
+                                    bgcolor="#00e5ff", alignment=ft.alignment.center,
+                                    content=ft.Text("Ir a palabras encontradas", size=14,
+                                                    color="#000000", weight=ft.FontWeight.BOLD)))),
+                        ft.Container(height=8),
+                        ft.Container(
+                            width=290,
+                            alignment=ft.alignment.center,
+                            content=ft.GestureDetector(
+                                on_tap_down=lambda _: confirm_review_answers(),
+                                content=ft.Container(width=140, height=44, border_radius=10,
+                                    bgcolor="#00e5ff", alignment=ft.alignment.center,
+                                    content=ft.Text("Continuar", size=14, color="#000000",
+                                                    weight=ft.FontWeight.BOLD)))),
+                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=0),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8, tight=True))
+        )
+
+        help_overlay = ft.Container(
+            width=page.window.width, height=page.window.height,
+            bgcolor="#aa000000",
+            alignment=ft.alignment.center,
+            visible=help_state["open"],
+            content=ft.Container(
+                width=330, padding=18,
+                bgcolor="#0d0d2b",
+                border_radius=16,
+                border=ft.border.all(2, "#00e5ff"),
+                content=ft.Column([
+                    ft.Text("Cómo jugar", size=20, color="#ffd700",
+                            weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+                    ft.Container(height=8),
+                    ft.Text("Las letras doradas aparecen en orden sobre las plataformas. ¡Recógelas en secuencia!",
+                            size=12, color="#88ffffff", text_align=ft.TextAlign.CENTER),
+                    ft.Container(height=8),
                     ft.Row([
                         ft.Container(width=18, height=18, bgcolor="#00e5ff", border_radius=4),
                         ft.Text("  Normal  ", size=12, color="#ccffffff"),
@@ -919,7 +1051,6 @@ def main(page: ft.Page):
                         ft.Text("  Bouncy = salto extra", size=12, color="#ccffffff"),
                     ], alignment=ft.MainAxisAlignment.CENTER, spacing=4),
                     ft.Container(height=8),
-                    # Escudo
                     ft.Row([
                         ft.Image(src="ESCUDO.png", width=46, height=46,
                                  fit=ft.ImageFit.CONTAIN),
@@ -928,7 +1059,6 @@ def main(page: ft.Page):
                                 color="#ccffffff", text_align=ft.TextAlign.LEFT),
                     ], alignment=ft.MainAxisAlignment.CENTER, spacing=0),
                     ft.Container(height=8),
-                    # Jetpack
                     ft.Row([
                         ft.Image(src="JETPACK.png", width=68, height=68,
                                  fit=ft.ImageFit.CONTAIN),
@@ -937,7 +1067,6 @@ def main(page: ft.Page):
                                 color="#ccffffff", text_align=ft.TextAlign.LEFT),
                     ], alignment=ft.MainAxisAlignment.CENTER, spacing=0),
                     ft.Container(height=8),
-                    # Bolita roja
                     ft.Row([
                         ft.Container(width=22, height=22, bgcolor="#ff2222",
                                      border_radius=11,
@@ -946,10 +1075,18 @@ def main(page: ft.Page):
                         ft.Text("Bolita roja = ¡PELIGRO!", size=13,
                                 color="#ccffffff"),
                     ], alignment=ft.MainAxisAlignment.CENTER, spacing=0),
-                    ft.Container(height=6),
-                ] if menu_state["htop"] else []),
-            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-               spacing=6, scroll=ft.ScrollMode.AUTO)))
+                    ft.Container(height=12),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: close_help_modal(),
+                        content=ft.Container(width=180, height=44, border_radius=10,
+                            bgcolor="#00e5ff", alignment=ft.alignment.center,
+                            content=ft.Text("Cerrar", size=15, color="#000000",
+                                            weight=ft.FontWeight.BOLD))),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6, tight=True))
+        )
+
+        page.controls.clear()
+        page.add(ft.Stack([base_menu, review_overlay, help_overlay], width=W, height=page.window.height))
         page.update()
 
     # ── Palabras encontradas ─────────────────────────────────────────────────
@@ -988,15 +1125,25 @@ def main(page: ft.Page):
                     content=ft.Text("(ninguna encontrada aún)", size=12, color="#44ffffff")))
 
         page.controls.clear()
-        page.add(ft.Container(expand=True, bgcolor="#0d0d2b",
+        page.add(ft.Container(
+            width=page.window.width,
+            height=page.window.height,
+            gradient=ft.LinearGradient(
+                begin=ft.alignment.top_center, end=ft.alignment.bottom_center,
+                colors=["#0d0d2b", "#141450"]),
             content=ft.Column([
                 ft.Container(height=24),
                 ft.Text("📚 Palabras Encontradas", size=22, color="#00e5ff",
                         weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
                 ft.Text(f"{len(found_set)} de {total_words} totales",
                         size=13, color="#88ffffff", text_align=ft.TextAlign.CENTER),
-                ft.Container(height=8),
-                ft.Container(width=340, height=460,
+                ft.Container(height=14),
+                ft.Container(
+                    width=340,
+                    padding=ft.padding.symmetric(horizontal=10, vertical=8),
+                    bgcolor="#120f2f",
+                    border_radius=18,
+                    border=ft.border.all(1, "#22ffffff"),
                     content=ft.Column(sections, scroll=ft.ScrollMode.AUTO, spacing=0)),
                 ft.Container(height=12),
                 ft.GestureDetector(on_tap_down=lambda _: show_menu(),
@@ -1004,7 +1151,7 @@ def main(page: ft.Page):
                         bgcolor="#22ffffff", alignment=ft.alignment.center,
                         content=ft.Text("← Volver al menú", size=14, color="#ffffff"))),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-               spacing=0, scroll=ft.ScrollMode.AUTO)))
+               spacing=0, alignment=ft.MainAxisAlignment.CENTER, scroll=ft.ScrollMode.AUTO)))
         page.update()
 
     show_menu()
