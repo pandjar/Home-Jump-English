@@ -6,6 +6,7 @@ import flet as ft
 import random
 import json
 import os
+import socket
 import time
 import threading
 import unicodedata
@@ -70,9 +71,11 @@ def main(page: ft.Page):
     page.title            = "Home Jump"
     page.bgcolor          = "#0d0d2b"
     page.padding          = 0
-    page.window.width     = W + 20
-    page.window.height    = H + 130
-    page.window.resizable = False
+    page.window.width     = 1000
+    page.window.height    = 800
+    page.window.resizable = True
+    page.window.min_width = 500
+    page.window.min_height = 600
 
     record      = load_record()
     cmd         = {"v": None}
@@ -778,7 +781,7 @@ def main(page: ft.Page):
         menu_idle["in_menu"] = False
         page.controls.clear()
         page.add(ft.Column([
-            game_stack,
+            ft.Container(expand=True, content=game_stack),
             ft.Container(
                 height=100, bgcolor="#0a0a22",
                 border=ft.border.only(top=ft.BorderSide(1, "#22ffffff")),
@@ -815,7 +818,7 @@ def main(page: ft.Page):
                         on_tap_up=  lambda _: gs.update({"right": False}),
                         on_pan_end= lambda _: gs.update({"right": False})),
                 ], spacing=5, alignment=ft.MainAxisAlignment.CENTER, expand=True)),
-        ], spacing=0))
+        ], spacing=0, expand=True))
         page.update()
 
     def start_game():
@@ -884,9 +887,9 @@ def main(page: ft.Page):
                         border=ft.border.all(1, "#44ffffff"),
                         alignment=ft.alignment.center,
                         content=ft.Text("← Volver al menú", size=14, color="#88ffffff"))),
-                ft.Container(height=16),
+                ft.Container(expand=True),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-               spacing=8, scroll=ft.ScrollMode.AUTO)))
+               spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)))
         page.update()
 
     # ── Menú principal ────────────────────────────────────────────────────────
@@ -908,8 +911,7 @@ def main(page: ft.Page):
         total_words = sum(len(v) for v in VOCABULARY.values())
 
         base_menu = ft.Container(
-            width=W,
-            height=page.window.height,
+            expand=True,
             gradient=ft.LinearGradient(
                 begin=ft.alignment.top_center, end=ft.alignment.bottom_center,
                 colors=["#0d0d2b", "#1a1a4e"]),
@@ -957,11 +959,12 @@ def main(page: ft.Page):
                         alignment=ft.alignment.center,
                         content=ft.Text("Cómo jugar", size=15, color="#00e5ff",
                                         weight=ft.FontWeight.BOLD))),
+                ft.Container(expand=True),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                spacing=6, scroll=ft.ScrollMode.AUTO))
 
         review_overlay = ft.Container(
-            width=page.window.width, height=page.window.height,
+            expand=True,
             bgcolor="#aa000000",
             alignment=ft.alignment.center,
             visible=review_state["open"],
@@ -1028,7 +1031,7 @@ def main(page: ft.Page):
         )
 
         help_overlay = ft.Container(
-            width=page.window.width, height=page.window.height,
+            expand=True,
             bgcolor="#aa000000",
             alignment=ft.alignment.center,
             visible=help_state["open"],
@@ -1086,7 +1089,7 @@ def main(page: ft.Page):
         )
 
         page.controls.clear()
-        page.add(ft.Stack([base_menu, review_overlay, help_overlay], width=W, height=page.window.height))
+        page.add(ft.Stack([base_menu, review_overlay, help_overlay], expand=True))
         page.update()
 
     # ── Palabras encontradas ─────────────────────────────────────────────────
@@ -1126,8 +1129,7 @@ def main(page: ft.Page):
 
         page.controls.clear()
         page.add(ft.Container(
-            width=page.window.width,
-            height=page.window.height,
+            expand=True,
             gradient=ft.LinearGradient(
                 begin=ft.alignment.top_center, end=ft.alignment.bottom_center,
                 colors=["#0d0d2b", "#141450"]),
@@ -1150,11 +1152,33 @@ def main(page: ft.Page):
                     content=ft.Container(width=220, height=44, border_radius=10,
                         bgcolor="#22ffffff", alignment=ft.alignment.center,
                         content=ft.Text("← Volver al menú", size=14, color="#ffffff"))),
+                ft.Container(expand=True),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-               spacing=0, alignment=ft.MainAxisAlignment.CENTER, scroll=ft.ScrollMode.AUTO)))
+               spacing=0, alignment=ft.MainAxisAlignment.START, scroll=ft.ScrollMode.AUTO, expand=True)))
         page.update()
 
     show_menu()
 
+#generador de IP para mostrar la aplicacion
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+    finally:
+        s.close()
 
-ft.app(main, assets_dir="assets")
+local_ip = get_local_ip()
+print(f"Servidor Flet en: http://{local_ip}:8550")
+print("En tu teléfono abre la app Flet y conéctala a esa dirección o usa conexión local.")
+
+
+ft.app(
+    target=main,
+    view=ft.AppView.FLET_APP_WEB,
+    host=local_ip,
+    port=8550,
+    assets_dir="assets"
+)
