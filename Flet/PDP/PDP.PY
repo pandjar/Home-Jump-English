@@ -1535,7 +1535,7 @@ def main(page: ft.Page):
             content=ft.Column([
                 ft.Container(height=36),
                 title_stack,
-                ft.Container(height=40),
+                ft.Container(height=50),
                 ft.Text("Salta · Recoge letras · Forma palabras en inglés",
                         size=13, color="#88ffffff", text_align=ft.TextAlign.CENTER),
                 ft.Container(height=20),
