@@ -1,4 +1,5 @@
-#v1.32.2
+# -*- coding: utf-8 -*-
+#v1.40.1
 #Jared Hdz Ctr "Pandajar"
 #python 3.14
 
@@ -6,16 +7,29 @@ import flet as ft
 import random
 import json
 import os
-import socket
 import time
 import threading
 import unicodedata
 
+# ─── Constants for game timing, animation, and display limits
 ANIMATION_FPS  = 10
 TIME_PER_FRAME = 1.0 / ANIMATION_FPS
 SECUENCIA_OJOS = [f"ojos_{i}.png" for i in range(30)]
 MENU_IDLE_SECS = 15   # segundos sin actividad → reanima el menú
 MAX_VISIBLE_LETTERS = 4   # máximo de fichas doradas visibles a la vez en pantalla
+
+# ─── Nueva animación del menú (velocidad reducida)
+SECUENCIA_NUEVA = []
+for i in range(1, 32):
+    if i == 6:
+        SECUENCIA_NUEVA.append((f"Animacion_nueva/frame{i}.png", 2.0))  # Hold de 2 segundos
+    else:
+        SECUENCIA_NUEVA.append((f"Animacion_nueva/frame{i}.png", 0.11))  # Más lento
+
+# ─── Animación infinita del menú
+SECUENCIA_INFINITA = [("Animacion_Infinita/frame32.png", 5.0)] + [
+    (f"Animacion_Infinita/frame{i}.png", 0.10) for i in range(33, 36)
+]
 
 # ─── VOCABULARY
 VOCABULARY = {
@@ -56,8 +70,9 @@ def save_record(r):
     with open(RECORD_FILE, "w") as f:
         json.dump(r, f, indent=2, ensure_ascii=False)
 
+# Guardar/leer récords locales para mostrar estadísticas de juego.
 # ─── CONSTANTS
-W, H         = 380, 620
+W, H         = 380, 720
 PW, PH       = 32, 32
 PLATW, PLATH = 80, 12
 GRAVITY      = 0.58
@@ -71,26 +86,61 @@ def main(page: ft.Page):
     page.title            = "Home Jump"
     page.bgcolor          = "#0d0d2b"
     page.padding          = 0
-    page.window.width     = 1000
-    page.window.height    = 800
-    page.window.resizable = True
-    page.window.min_width = 500
-    page.window.min_height = 600
+    page.window.width     = W + 20
+    page.window.height    = H + 20
+    page.window.resizable = False
 
     record      = load_record()
-    cmd         = {"v": None}
-    loop_paused = threading.Event()
-    gs          = {"anim": {"index": 0, "last_time": 0, "complete": False}}
+    cmd         = {"v": None}  # mensajes simples para el bucle principal
+    loop_paused = threading.Event()  # pausa del hilo del juego
+    gs          = {
+        "anim": {"index": 0, "last_time": 0, "complete": False},
+        "anim_nueva": {"index": 0, "last_time": 0, "mode": "normal"}
+    }
 
+    # Estado compartido del juego: posiciones, plataformas, objetos y flags.
+    # Se actualiza desde múltiples funciones y se renderiza en `render()`.
+    
     # Idle tracker para el menú
     menu_idle  = {"last_action": 0.0, "in_menu": False}
     help_state = {"open": False}
     review_state = {"open": False, "cards": [], "answers": {}, "error": "", "already_reviewed": False}
+    admin_state = {
+        "open": False,
+        "skip_review": False,
+        "ghost": False,
+        "mouse_control": False,
+        "return_to_game": False,
+    }  # modo administrador oculto
+
+    admin_controls = {
+        "info": None,
+        "skip_text": None,
+        "ghost_text": None,
+        "mouse_text": None,
+    }
 
     sel_cats = {"v": list(VOCABULARY.keys())}
 
+    def safe_update(control):
+        """Actualizar un control sin causar errores de socket."""
+        if control is None:
+            return
+        try:
+            control.update()
+        except (OSError, BrokenPipeError, ConnectionResetError, Exception):
+            pass
+
+    def safe_page_update():
+        """Actualizar la página sin causar errores de socket."""
+        try:
+            page.update()
+        except (OSError, BrokenPipeError, ConnectionResetError, Exception):
+            pass
+
     def active_words():
-        return [w for cat in sel_cats["v"] for w in VOCABULARY[cat]]
+        words = [w for cat in sel_cats["v"] for w in VOCABULARY[cat]]
+        return sorted(words, key=len)
 
     def normalize_answer(text: str) -> str:
         value = unicodedata.normalize("NFD", text or "")
@@ -98,8 +148,8 @@ def main(page: ft.Page):
         return value.strip().lower()
 
     def start_review_session():
-        if review_state["already_reviewed"]:
-            show_category_select()
+        if review_state["already_reviewed"] or admin_state["skip_review"]:
+            start_game()
             return
 
         found_words = list(record.get("words_found", []))
@@ -154,30 +204,292 @@ def main(page: ft.Page):
         help_state["open"] = False
         show_menu(False)
 
+    def _refresh_admin_overlay():
+        if admin_controls["info"] is not None:
+            admin_controls["info"].value = get_admin_info()
+            admin_controls["skip_text"].value = f"Saltar repaso: {'ON' if admin_state['skip_review'] else 'OFF'}"
+            admin_controls["ghost_text"].value = f"Modo invisible: {'ON' if admin_state['ghost'] else 'OFF'}"
+            admin_controls["mouse_text"].value = f"Mover con ratón: {'ON' if admin_state['mouse_control'] else 'OFF'}"
+            try:
+                admin_controls["info"].update()
+                admin_controls["skip_text"].update()
+                admin_controls["ghost_text"].update()
+                admin_controls["mouse_text"].update()
+                return
+            except Exception:
+                pass
+        show_menu(False)
+
+    def open_admin_modal():
+        admin_state["open"] = True
+        admin_state["return_to_game"] = bool(gs.get("platforms")) and not gs.get("over")
+        show_menu(False)
+
+    def close_admin_modal():
+        admin_state["open"] = False
+        admin_state["return_to_game"] = False
+        show_menu(False)
+
+    def admin_apply_powerup(kind: str):
+        if kind == "shield":
+            gs["shield_ttl"] = 220
+            gs["notif"] = {"text": "🛡️  ESCUDO ADMINISTRADOR", "ttl": 120, "col": "#00aaff"}
+        else:
+            gs["vy"] = -32.0
+            gs["notif"] = {"text": "🚀  JETPACK ADMINISTRADOR", "ttl": 120, "col": "#ffaa00"}
+
+        should_return = admin_state.get("return_to_game") and not gs.get("over")
+        admin_state["open"] = False
+        admin_state["return_to_game"] = False
+        if should_return:
+            show_game()
+            cmd["v"] = "start"
+        else:
+            show_menu(False)
+
+    def toggle_admin_skip_review():
+        admin_state["skip_review"] = not admin_state["skip_review"]
+        _refresh_admin_overlay()
+
+    def toggle_admin_ghost():
+        admin_state["ghost"] = not admin_state["ghost"]
+        _refresh_admin_overlay()
+
+    def toggle_admin_mouse_control():
+        admin_state["mouse_control"] = not admin_state["mouse_control"]
+        try:
+            mo = gs.get("mouse_overlay")
+            if mo is not None:
+                mo.visible = bool(admin_state.get("mouse_control") and not gs.get("paused") and not gs.get("over"))
+                try:
+                    mo.update()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        _refresh_admin_overlay()
+
+    def _mouse_pos(e):
+        x = getattr(e, "local_x", None)
+        y = getattr(e, "local_y", None)
+        if x is None or y is None:
+            for attr in ("x", "client_x", "page_x"):
+                if x is None:
+                    x = getattr(e, attr, None)
+            for attr in ("y", "client_y", "page_y"):
+                if y is None:
+                    y = getattr(e, attr, None)
+        if x is None or y is None:
+            return None, None
+        return float(x), float(y)
+
+    def _player_hit_test(px, py, x, y):
+        return px <= x <= px + PW and py <= y <= py + PH
+
+    def _mouse_control_hover(e):
+        # No se mueva al pasar el ratón: solo activar el arrastre si se pulsa sobre el personaje.
+        return
+
+    def _mouse_control_start(e):
+        if not admin_state.get("mouse_control") or gs.get("paused") or gs.get("over"):
+            return
+        x, y = _mouse_pos(e)
+        if x is None or y is None:
+            return
+        if not _player_hit_test(gs["px"], gs["py"], x, y):
+            return
+        gs["mouse_dragging"] = True
+        gs["mouse_drag_offset"] = x - gs["px"]
+
+    def _mouse_control_pan(e):
+        if not admin_state.get("mouse_control") or gs.get("paused") or gs.get("over"):
+            return
+        if not gs.get("mouse_dragging"):
+            return
+        x, y = _mouse_pos(e)
+        if x is None:
+            return
+        gs["px"] = max(-PW, min(W, x - gs["mouse_drag_offset"]))
+
+    def _mouse_control_end(e):
+        gs["mouse_dragging"] = False
+
+    def get_admin_info() -> str:
+        target = gs.get("target") or "(ninguna)"
+        score = gs.get("score", 0)
+        letters = len(gs.get("letters", []))
+        platforms = len(gs.get("platforms", []))
+        state = "PAUSA" if gs.get("paused") else "GAME OVER" if gs.get("over") else "JUGANDO" if cmd.get("v") == "start" else "MENU"
+        return (
+            "Palabra objetivo: " + str(target) + "\n"
+            + "Puntaje: " + str(score) + "\n"
+            + "Letras en pantalla: " + str(letters) + "\n"
+            + "Plataformas: " + str(platforms) + "\n"
+            + "Estado: " + str(state) + "\n"
+            + "Saltar repaso: " + ("SI" if admin_state["skip_review"] else "NO") + "\n"
+            + "Invisibilidad: " + ("SI" if admin_state["ghost"] else "NO") + "\n"
+            + "Control raton: " + ("SI" if admin_state["mouse_control"] else "NO")
+        )
+
+    def clear_progress():
+        # Borra el fichero de récords y limpia el estado en memoria
+        try:
+            record.clear()
+            record.update({"best_height": 0, "words_found": [], "total_games": 0})
+            save_record(record)
+            gs["notif"] = {"text": "Progreso borrado.", "ttl": 120, "col": "#00ff88"}
+        except Exception:
+            pass
+        # Actualizar la vista del menú para reflejar cambios
+        try:
+            show_menu()
+        except Exception:
+            try:
+                safe_render()
+            except Exception:
+                pass
+
     # ── state ────────────────────────────────────────────────────────────────
     def reset_gs():
+        # Restaurar el estado principal del juego al iniciar una partida nueva.
+        # Cada clave describe el estado de movimiento, cámara, objetos y powerups.
         gs.update({
             "px": float(W // 2 - PW // 2),
             "py": float(H - 160),
             "vy": 0.0, "cam": 0.0, "score": 0,
             "left": False, "right": False,
             "platforms": [], "letters": [], "balls": [], "powerups": [],
-            "target": None, "tidx": 0,
-            "collected": [], "found": [], "notif": None,
+            "target": None, "tidx": 0, "next_letter_idx": 0,
+            "collected": [], "collected_positions": set(), "visible_positions": set(), "found": [], "notif": None,
             "over": False, "paused": False,
             "shield_ttl": 0,   # ticks restantes de escudo (>0 = invulnerable)
+            "detectors": None,
+            "detectors_visible": True,
+            "pause_btn_inner": None,
+            "mouse_dragging": False,
+            "mouse_drag_offset": 0.0,
         })
 
     def pick_target():
         words = active_words()
-        rem = [w for w in words if w not in gs["found"]] or words[:]
-        gs["target"]    = random.choice(rem)
+        already = set(record.get("words_found", []))
+        rem = [w for w in words if w not in already and w not in gs["found"]]
+        if not rem:
+            gs["target"] = None
+            gs["letters"] = []
+            return
+        gs["target"]    = rem[0]
         gs["tidx"]      = 0
+        gs["next_letter_idx"] = 0
+        gs["letters"]   = []
         gs["collected"] = []
+        gs["collected_positions"] = set()
+        gs["visible_positions"] = set()
 
     # ── platforms, balls & power-ups ─────────────────────────────────────────
     def _rand_type():
         return random.choices(["normal", "bouncy"], weights=[79, 21])[0]
+
+    def _spawn_good_letter(wx, wy, idx):
+        if not gs["target"]:
+            return
+        if idx in gs["visible_positions"]:
+            return
+        if idx >= len(gs["target"]):
+            return
+        if len([l for l in gs["letters"] if l["kind"] == "good"]) >= MAX_VISIBLE_LETTERS:
+            return
+
+        spawn_x = wx + PLATW // 2 - 9
+        spawn_y = wy - 34
+        if _overlaps_letter(spawn_x, spawn_y):
+            return
+
+        gs["letters"].append({
+            "wx": spawn_x,
+            "wy": spawn_y,
+            "char": gs["target"][idx],
+            "lidx": idx,
+            "kind": "good",
+        })
+        gs["visible_positions"].add(idx)
+
+    def _spawn_pending_good_letter(wx, wy):
+        if not gs["target"]:
+            return
+        if len([l for l in gs["letters"] if l["kind"] == "good"]) >= MAX_VISIBLE_LETTERS:
+            return
+
+        remaining = [idx for idx in range(len(gs["target"])) if idx not in gs["collected_positions"]]
+        if not remaining:
+            return
+
+        idx = random.choice(remaining)
+        _spawn_good_letter(wx, wy, idx)
+
+    def _spawn_rescue_platform(wx, wy):
+        # Genera una plataforma de rescate segura cerca de la plataforma `wx, wy`
+        # para darle al jugador una segunda oportunidad después de una letra trampa.
+        candidates = []
+        for _ in range(60):
+            px = random.randint(10, W - PLATW - 10)
+            py = wy + random.choice([-110, -90, -70, -40, 40, 70, 90, 110])
+            if not (10 <= px <= W - PLATW - 10):
+                continue
+            if not (0 <= py <= H - 20):
+                continue
+            if abs(px - wx) < PLATW + 96 and abs(py - wy) < 40:
+                continue
+            if any(abs(px - p["wx"]) < PLATW - 10 and abs(py - p["wy"]) < 8 for p in gs["platforms"]):
+                continue
+            candidates.append((px, py))
+
+        if not candidates:
+            rescue_x = random.randint(10, W - PLATW - 10)
+            rescue_y = max(20, min(H - 20, wy + random.choice([-110, -90, -70, -40, 40, 70, 90, 110])))
+            candidates.append((rescue_x, rescue_y))
+
+        rescue_x, rescue_y = random.choice(candidates)
+        gs["platforms"].append({
+            "wx": rescue_x,
+            "wy": rescue_y,
+            "w": PLATW,
+            "type": "rescue",
+        })
+        return rescue_x, rescue_y
+
+    def _spawn_trap_letter(wx, wy):
+        # Inserta una letra incorrecta sobre una plataforma y crea una plataforma
+        # de rescate segura cerca para que el jugador pueda recuperarse.
+        if not gs["target"]:
+            return
+        if any(l["kind"] == "wrong" for l in gs["letters"]):
+            return
+
+        lx = wx + PLATW // 2 - 9
+        ly = wy - 34
+        if any(l["wx"] == lx and l["wy"] == ly for l in gs["letters"]):
+            return
+
+        wrong_char = random.choice([c for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if c not in gs["target"]])
+        gs["letters"].append({
+            "wx": lx,
+            "wy": ly,
+            "char": wrong_char,
+            "kind": "wrong",
+        })
+
+        rescue_x, rescue_y = _spawn_rescue_platform(wx, wy)
+
+        # Agrupa la trampa con letras correctas cercanas para que no aparezca sola.
+        cluster_xs = []
+        for offset in (-26, 0, 26):
+            candidate = rescue_x + offset
+            if 10 <= candidate <= W - PLATW - 10:
+                cluster_xs.append(candidate)
+
+        for extra_x in cluster_xs[:2]:
+            _spawn_pending_good_letter(extra_x, rescue_y)
 
     def _spawn_ball(world_y):
         vx = random.choice([-1, 1]) * random.uniform(2.0, 4.0)
@@ -186,20 +498,51 @@ def main(page: ft.Page):
             "wy": float(world_y), "vx": vx,
         })
 
+    def _overlaps_letter(wx, wy):
+        for l in gs["letters"]:
+            if abs(wx - l["wx"]) < 24 and abs(wy - l["wy"]) < 24:
+                return True
+        return False
+
     def _spawn_powerup(world_x, world_y):
-        gs["powerups"].append({
-            "wx": float(world_x), "wy": float(world_y),
-            "type": random.choice(["shield", "jetpack"]),
-        })
+        base_x = max(24, min(W - 24, int(world_x)))
+        base_y = float(world_y)
+        candidates = [
+            (base_x, base_y),
+            (base_x - 20, base_y),
+            (base_x + 20, base_y),
+            (base_x, base_y - 10),
+            (base_x - 12, base_y - 10),
+            (base_x + 12, base_y - 10),
+        ]
+
+        for cand_x, cand_y in candidates:
+            px = max(18, min(W - 18, cand_x))
+            py = float(cand_y)
+            if _overlaps_letter(px, py):
+                continue
+            if any(abs(px - pu["wx"]) < 18 and abs(py - pu["wy"]) < 18 for pu in gs["powerups"]):
+                continue
+            gs["powerups"].append({
+                "wx": float(px), "wy": py,
+                "type": random.choice(["shield", "jetpack"]),
+            })
+            return
 
     def gen_platforms():
         gs["platforms"].append({"wx": 0, "wy": H - 30, "w": W, "type": "ground"})
-        wy = H - 160
+        wy = H - 50  # Cambiar altura inicial a 50
         for _ in range(22):
             wx    = random.randint(10, W - PLATW - 10)
             ptype = _rand_type()
             gs["platforms"].append({"wx": wx, "wy": wy, "w": PLATW, "type": ptype})
+
+            if gs["target"]:
+                _spawn_pending_good_letter(wx, wy)
+
             wy -= random.randint(72, 112)
+
+        gs["platforms"] = [p for p in gs["platforms"] if not (p["type"] != "ground" and p["wy"] == H - 50)]
 
     def extend_platforms():
         if not gs["platforms"]: return
@@ -210,17 +553,12 @@ def main(page: ft.Page):
             ptype = _rand_type()
             gs["platforms"].append({"wx": wx, "wy": top, "w": PLATW, "type": ptype})
 
-            # Letras doradas: solo para el índice actual (tidx),
-            # máximo MAX_VISIBLE_LETTERS fichas visibles a la vez.
-            if gs["target"] and gs["tidx"] < len(gs["target"]) and random.random() < 0.65:
-                if len(gs["letters"]) < MAX_VISIBLE_LETTERS:
-                    idx = gs["tidx"]
-                    gs["letters"].append({
-                        "wx": wx + PLATW // 2 - 9,
-                        "wy": top - 34,
-                        "char": gs["target"][idx],
-                        "lidx": idx,
-                    })
+            if gs["target"]:
+                _spawn_pending_good_letter(wx, top)
+
+            if gs["target"] and not any(l["kind"] == "wrong" for l in gs["letters"]):
+                if random.random() < 0.20:
+                    _spawn_trap_letter(wx, top)
 
             if random.random() < 0.05:          # 5% bolita roja
                 _spawn_ball(top - 40)
@@ -235,11 +573,13 @@ def main(page: ft.Page):
 
     # ── physics ──────────────────────────────────────────────────────────────
     def step():
+        # Movimiento horizontal de jugador y wrap-around cuando sale del borde.
         if gs["left"]:  gs["px"] -= SPEED
         if gs["right"]: gs["px"] += SPEED
         if gs["px"] + PW < 0: gs["px"] = float(W)
         if gs["px"] > W:      gs["px"] = float(-PW)
 
+        # Aplicar gravedad y actualizar posición vertical.
         gs["vy"] += GRAVITY
         gs["py"] += gs["vy"]
         wpy = gs["py"] + gs["cam"]
@@ -254,6 +594,7 @@ def main(page: ft.Page):
                     gs["vy"] = JUMP * (1.4 if p["type"] == "bouncy" else 1.0)
 
         if gs["py"] < H * 0.42:
+            # Subida de cámara: mantener al jugador dentro de la zona superior.
             d = H * 0.42 - gs["py"]
             gs["cam"] -= d
             gs["py"]  += d
@@ -263,25 +604,7 @@ def main(page: ft.Page):
         if gs["shield_ttl"] > 0:
             gs["shield_ttl"] -= 1
 
-        # ── Bolitas + colisión (respeta escudo)
-        for b in gs["balls"]:
-            b["wx"] += b["vx"]
-            if b["wx"] <= BALL_R:
-                b["wx"] = float(BALL_R);  b["vx"] = abs(b["vx"])
-            elif b["wx"] >= W - BALL_R:
-                b["wx"] = float(W - BALL_R); b["vx"] = -abs(b["vx"])
-            bsx = b["wx"]; bsy = b["wy"] - gs["cam"]
-            cx  = max(gs["px"], min(bsx, gs["px"] + PW))
-            cy  = max(gs["py"], min(bsy, gs["py"] + PH))
-            if (bsx - cx)**2 + (bsy - cy)**2 <= BALL_R**2:
-                if gs["shield_ttl"] > 0:
-                    # Escudo absorbe el golpe y se rompe
-                    gs["shield_ttl"] = 0
-                    gs["notif"] = {"text": "🛡️  ¡ESCUDO ROTO!", "ttl": 90, "col": "#ff4444"}
-                else:
-                    do_end_game(); return
-
-        # ── Power-ups: recolección
+        # ── Power-ups: recolección (antes de peligros para que el escudo proteja en el mismo cuadro)
         wpy = gs["py"] + gs["cam"]
         keep_pu = []
         for pu in gs["powerups"]:
@@ -299,34 +622,69 @@ def main(page: ft.Page):
                 keep_pu.append(pu)
         gs["powerups"] = keep_pu
 
+        # ── Bolitas + colisión (respeta escudo)
+        keep_balls = []
+        for b in gs["balls"]:
+            b["wx"] += b["vx"]
+            if b["wx"] <= BALL_R:
+                b["wx"] = float(BALL_R);  b["vx"] = abs(b["vx"])
+            elif b["wx"] >= W - BALL_R:
+                b["wx"] = float(W - BALL_R); b["vx"] = -abs(b["vx"])
+            bsx = b["wx"]; bsy = b["wy"] - gs["cam"]
+            cx  = max(gs["px"], min(bsx, gs["px"] + PW))
+            cy  = max(gs["py"], min(bsy, gs["py"] + PH))
+            if (bsx - cx)**2 + (bsy - cy)**2 <= BALL_R**2:
+                if admin_state.get("ghost"):
+                        continue
+                if gs["shield_ttl"] > 0:
+                    # Escudo absorbe el golpe y se rompe
+                    gs["shield_ttl"] = 0
+                    gs["notif"] = {"text": "🛡️  ¡ESCUDO ROTO!", "ttl": 90, "col": "#ff4444"}
+                    continue
+                else:
+                    do_end_game(); return
+            keep_balls.append(b)
+        gs["balls"] = keep_balls
+
         # ── Letras
         wpy = gs["py"] + gs["cam"]
         keep = []
-        collected_lidx = None
         for l in gs["letters"]:
             hit = (gs["px"] < l["wx"] + 22 and gs["px"] + PW > l["wx"] and
                    wpy < l["wy"] + 22 and wpy + PH > l["wy"])
-            if hit and gs["target"] and l["lidx"] == gs["tidx"] and collected_lidx is None:
-                collected_lidx = l["lidx"]          # marca el índice recogido
-                gs["collected"].append(l["char"])
-                gs["tidx"] += 1
-                if gs["tidx"] >= len(gs["target"]):  # ← palabra COMPLETA
-                    tw = gs["target"]
-                    gs["found"].append(tw)
-                    gs["notif"] = {"text": f"✓  {tw}  =  {TRANSLATIONS.get(tw,'')}", "ttl": 110, "col": "#00ff88"}
-                    pick_target()
-                    gs["letters"] = []               # limpiar todas las letras al cambiar de palabra
-                    break
-            else:
-                keep.append(l)
+            if hit:
+                if l["kind"] == "wrong":
+                    if admin_state.get("ghost"):
+                        continue
+                    if gs["shield_ttl"] > 0:
+                        gs["shield_ttl"] = 0
+                        gs["notif"] = {"text": "🛡️  ¡ESCUDO ROTO!", "ttl": 90, "col": "#ff4444"}
+                        continue
 
-        if collected_lidx is not None and not gs.get("target") == gs.get("_last_target"):
-            # Eliminar duplicados del mismo índice que acaba de recogerse
-            gs["letters"] = [l for l in keep if l["lidx"] != collected_lidx]
-        elif collected_lidx is not None:
-            gs["letters"] = [l for l in keep if l["lidx"] != collected_lidx]
-        else:
-            gs["letters"] = keep
+                    gs["notif"] = {"text": "☠️  Letra incorrecta. GAME OVER", "ttl": 80, "col": "#ff4444"}
+                    do_end_game()
+                    return
+
+                if gs["target"] and l["kind"] == "good" and "lidx" in l:
+                    idx = l["lidx"]
+                    if idx not in gs["collected_positions"]:
+                        gs["collected_positions"].add(idx)
+                        gs["collected"].append(l["char"])
+                        gs["tidx"] = len(gs["collected_positions"])
+                        if len(gs["collected_positions"]) >= len(gs["target"]):
+                            tw = gs["target"]
+                            gs["found"].append(tw)
+                            gs["notif"] = {"text": f"✓  {tw}  =  {TRANSLATIONS.get(tw,'')}", "ttl": 110, "col": "#00ff88"}
+                            pick_target()
+                            gs["letters"] = []
+                            break
+                    # cualquiera que choque se elimina de pantalla
+                    continue
+
+            keep.append(l)
+
+        gs["letters"] = keep
+        gs["visible_positions"] = {l["lidx"] for l in gs["letters"] if l["kind"] == "good" and "lidx" in l}
 
         if gs["notif"]:
             gs["notif"]["ttl"] -= 1
@@ -345,15 +703,45 @@ def main(page: ft.Page):
         for w in gs["found"]:
             if w not in record["words_found"]:
                 record["words_found"].append(w)
+        try:
+            mo = gs.get("mouse_overlay")
+            if mo is not None:
+                mo.visible = False
+                try:
+                    mo.update()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         save_record(record)
 
     # ── render ───────────────────────────────────────────────────────────────
+    # Renderiza la escena de juego completa y actualiza los controles visibles.
     game_stack = ft.Stack(width=W, height=H, clip_behavior=ft.ClipBehavior.HARD_EDGE)
 
     def render():
         is_over   = gs.get("over", False)
         is_paused = gs.get("paused", False)
         items     = []
+
+        # Asegurar que los detectores táctiles no intercepten taps cuando
+        # el juego está en pausa o en GAME OVER.
+        dt = gs.get("detectors")
+        if dt:
+            try:
+                left_det, right_det = dt
+                vis = (not is_paused and not is_over) and not admin_state.get("mouse_control")
+                # Actualizar sólo cuando cambie la visibilidad para evitar updates constantes
+                if gs.get("detectors_visible") != vis:
+                    left_det.visible = vis
+                    right_det.visible = vis
+                    gs["detectors_visible"] = vis
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
         # Fondo
         items.append(ft.Container(width=W, height=H,
@@ -365,12 +753,26 @@ def main(page: ft.Page):
         for p in gs["platforms"]:
             sy = p["wy"] - gs["cam"]
             if -PLATH - 4 < sy < H + PLATH:
-                col  = "#ff6b35" if p["type"] == "bouncy" else "#00e5ff"
-                gcol = "#22ff6b35" if p["type"] == "bouncy" else "#2200e5ff"
+                if p["type"] == "bouncy":
+                    col  = "#ff6b35"
+                    gcol = "#22ff6b35"
+                elif p["type"] == "rescue":
+                    col  = "#58ff99"
+                    gcol = "#2200ff99"
+                else:
+                    col  = "#00e5ff"
+                    gcol = "#2200e5ff"
                 items.append(ft.Container(left=p["wx"]-3, top=sy-3,
                     width=p["w"]+6, height=PLATH+6, bgcolor=gcol, border_radius=5))
-                items.append(ft.Container(left=p["wx"], top=sy,
-                    width=p["w"], height=PLATH, bgcolor=col, border_radius=3))
+                if p["type"] == "rescue":
+                    items.append(ft.Container(left=p["wx"], top=sy,
+                        width=p["w"], height=PLATH, bgcolor=col, border_radius=3,
+                        content=ft.Container(alignment=ft.alignment.center,
+                            content=ft.Text("SEGURA", size=9, color="#003300",
+                                weight=ft.FontWeight.BOLD))))
+                else:
+                    items.append(ft.Container(left=p["wx"], top=sy,
+                        width=p["w"], height=PLATH, bgcolor=col, border_radius=3))
                 items.append(ft.Container(left=p["wx"]+4, top=sy+2,
                     width=p["w"]-8, height=3, bgcolor="#66ffffff", border_radius=2))
 
@@ -427,11 +829,15 @@ def main(page: ft.Page):
         for l in gs["letters"]:
             sy = l["wy"] - gs["cam"]
             if -30 < sy < H + 30:
+                fill = "#55ffd700"
+                border = "#ffd700"
+                text_color = "#ffd700"
+
                 items.append(ft.Container(left=l["wx"]-5, top=sy-5,
-                    width=30, height=30, bgcolor="#55ffd700",
-                    border_radius=15, border=ft.border.all(1, "#ffd700")))
+                    width=30, height=30, bgcolor=fill,
+                    border_radius=15, border=ft.border.all(1, border)))
                 items.append(ft.Container(left=l["wx"]+1, top=sy-1,
-                    content=ft.Text(l["char"], size=17, color="#ffd700",
+                    content=ft.Text(l["char"], size=17, color=text_color,
                                     weight=ft.FontWeight.BOLD)))
 
         # ── PERSONAJE ROBOT animado ──────────────────────────────────────────
@@ -536,67 +942,108 @@ def main(page: ft.Page):
             width=14, height=3,
             bgcolor="#33ee44", border_radius=2))
 
-        # Bandana (diadema blanca con borde verde, tiras hacia la izquierda)
-        items.append(ft.Container(             # cinta principal
-            left=px + 2, top=py - 3,
-            width=22, height=5,
-            bgcolor="#f5f5f5", border_radius=3,
-            border=ft.border.all(1, "#33ee44")))
-        items.append(ft.Container(             # cola izquierda de la bandana
-            left=px - 5, top=py - 9,
-            width=7, height=9,
-            bgcolor="#f5f5f5", border_radius=3,
-            border=ft.border.all(1, "#33ee44")))
-        items.append(ft.Container(             # punta de la cola
-            left=px - 8, top=py - 12,
-            width=5, height=6,
-            bgcolor="#f5f5f5", border_radius=2,
-            border=ft.border.all(1, "#33ee44")))
+        if admin_state.get("ghost"):
+            # Cuando el admin está invisible, no cortamos el render completo; solo
+            # añadimos un contorno tenue del robot y saltamos detalles.
+            items.append(ft.Container(
+                left=px + 4, top=py + 4,
+                width=24, height=24,
+                border=ft.border.all(1, "#88ffffff"),
+                border_radius=12,
+                opacity=0.12))
+        else:
+            # Bandana (diadema blanca con borde verde, tiras hacia la izquierda)
+            items.append(ft.Container(             # cinta principal
+                left=px + 2, top=py - 3,
+                width=22, height=5,
+                bgcolor="#f5f5f5", border_radius=3,
+                border=ft.border.all(1, "#33ee44")))
+            items.append(ft.Container(             # cola izquierda de la bandana
+                left=px - 5, top=py - 9,
+                width=7, height=9,
+                bgcolor="#f5f5f5", border_radius=3,
+                border=ft.border.all(1, "#33ee44")))
+            items.append(ft.Container(             # punta de la cola
+                left=px - 8, top=py - 12,
+                width=5, height=6,
+                bgcolor="#f5f5f5", border_radius=2,
+                border=ft.border.all(1, "#33ee44")))
 
         # ── HUD ──────────────────────────────────────────────────────────────
 
-        # Arriba izquierda: Altura + Récord
-        items.append(ft.Container(left=8, top=6, content=ft.Column([
-            ft.Text(f"Altura: {gs['score']}", size=15, color="#ffffff",
-                    weight=ft.FontWeight.BOLD),
-            ft.Text(f"Récord: {record['best_height']}", size=12, color="#00e5ff"),
-        ], spacing=0)))
+        hud_left = ft.Container(
+            width=144,
+            content=ft.Column([
+                ft.Text("ALTURA", size=9, color="#88d8ff",
+                        weight=ft.FontWeight.BOLD),
+                ft.Text(f"{gs['score']}", size=19, color="#ffffff",
+                        weight=ft.FontWeight.BOLD),
+                ft.Text("RÉCORD", size=9, color="#ffd166",
+                        weight=ft.FontWeight.BOLD),
+                ft.Text(f"{record['best_height']}", size=16, color="#ffe08a",
+                        weight=ft.FontWeight.BOLD),
+            ], spacing=1))
 
-        # Arriba derecha: palabra en ESPAÑOL ← movida arriba
+        hud_center = ft.Container(expand=False, width=0)
+        if gs.get("shield_ttl", 0) > 0:
+            ttl = gs["shield_ttl"]
+            segundos = int(ttl * 0.032)  # Convertir ticks a segundos
+            hud_center = ft.Container(
+                bgcolor="#220099ff", border_radius=8,
+                border=ft.border.all(1, "#00aaff"),
+                padding=ft.padding.symmetric(horizontal=8, vertical=2),
+                content=ft.Row([
+                    ft.Text("🛡️", size=14),
+                    ft.Text(f"{segundos}s", size=12, color="#00aaff", weight=ft.FontWeight.BOLD),
+                ], alignment=ft.MainAxisAlignment.CENTER, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6))
+
+        hud_right = ft.Container(expand=True, alignment=ft.alignment.center_right)
         if gs["target"]:
             tw = gs["target"]
-            items.append(ft.Container(right=8, top=6,
-                content=ft.Column([
-                    ft.Text(f"({TRANSLATIONS.get(tw,'')})", size=13,
-                            color="#ffee55", weight=ft.FontWeight.BOLD,
-                            text_align=ft.TextAlign.RIGHT),
-                    ft.Text(f"✓ {len(gs['found'])}" if gs["found"] else "",
-                            size=12, color="#00ff88",
-                            text_align=ft.TextAlign.RIGHT),
-                ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.END)))
+            # Mostrar la traducción si existe; si no, mostrar la palabra en inglés
+            display_translation = TRANSLATIONS.get(tw, tw)
+            hud_right = ft.Container(
+            expand=True,
+            alignment=ft.alignment.center_right,
+            content=ft.Column([
+                ft.Text(f"Encuentra la palabra: {display_translation}", size=13,
+                    color="#ffee55", weight=ft.FontWeight.BOLD,
+                    text_align=ft.TextAlign.RIGHT),
+                ft.Text(f"✓ {len(gs['found'])}" if gs["found"] else "",
+                    size=12, color="#00ff88",
+                    text_align=ft.TextAlign.RIGHT),
+            ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.END))
 
-        # Escudo activo — indicador top-center
-        if gs.get("shield_ttl", 0) > 0:
-            pct = gs["shield_ttl"] / 220
-            items.append(ft.Container(
-                left=W//2 - 40, top=6, width=80, height=20,
-                bgcolor="#220099ff", border_radius=10,
-                border=ft.border.all(1, "#00aaff"),
-                content=ft.Row([
-                    ft.Text("🛡️", size=13),
-                    ft.Container(width=int(50 * pct), height=8,
-                                 bgcolor="#00aaff", border_radius=4),
-                ], alignment=ft.MainAxisAlignment.CENTER, spacing=3)))
+        items.append(ft.Container(
+            left=4, top=2, right=4, height=84,
+            bgcolor="#cc000000",
+            border_radius=12,
+            padding=ft.padding.only(left=8, right=8, top=8, bottom=8),
+            content=ft.Row([
+                hud_left,
+                hud_center,
+                hud_right,
+            ], alignment=ft.MainAxisAlignment.SPACE_AROUND,
+               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ))
 
         # Abajo: palabra en INGLÉS completa con guiones (todas las letras)
         if gs["target"]:
-            tw   = gs["target"]
-            disp = " ".join(c if i < gs["tidx"] else "_"
-                            for i, c in enumerate(tw))   # palabra completa
-            items.append(ft.Container(left=0, top=H - 600, width=W, bgcolor="#22000000",
+            tw = gs["target"]
+            word_spans = [
+                ft.TextSpan(
+                    text=c + " ",
+                    style=ft.TextStyle(color="#ffd700" if i in gs["collected_positions"] else "#888888")
+                )
+                for i, c in enumerate(tw)
+            ]
+            items.append(ft.Container(left=6, top=94, right=6,
+                padding=ft.padding.all(8),
+                bgcolor="#22000000", border_radius=10,
                 content=ft.Column([
-                    ft.Text(f"Forma: {disp}", size=16, color="#ffd700",
+                    ft.Text("En inglés es:", size=16, color="#ffd700",
                             weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+                    ft.Text(spans=word_spans, size=16, text_align=ft.TextAlign.CENTER),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=1)))
 
         # Notificación flotante (palabra completada / power-up)
@@ -678,7 +1125,7 @@ def main(page: ft.Page):
         game_stack.controls = items
         try:
             game_stack.update()
-        except Exception:
+        except (OSError, BrokenPipeError, ConnectionResetError, Exception):
             pass
 
     # ── LOOP ─────────────────────────────────────────────────────────────────
@@ -691,17 +1138,44 @@ def main(page: ft.Page):
     text_jump = ft.Text("JUMP", size=54, weight=ft.FontWeight.BOLD,
                         color="#ffd700", opacity=0, animate_opacity=800)
 
+    nueva_anim_img = ft.Image(src="Animacion_nueva/frame1.png", width=255, height=150,
+                              fit=ft.ImageFit.CONTAIN, visible=False)
+    infinita_anim_img = ft.Image(src="Animacion_Infinita/frame32.png", width=280, height=190,
+                                 fit=ft.ImageFit.CONTAIN, visible=False)
+
     def _restart_anim():
         """Reinicia la animación de ojos del menú."""
         gs["anim"].update({"index": 0, "last_time": 0, "complete": False})
+        gs["anim_nueva"].update({"index": 0, "last_time": 0, "mode": "normal"})
         eyes_img.opacity  = 1
         eyes_img.src      = SECUENCIA_OJOS[0]
         text_home.opacity = 0
         text_jump.opacity = 0
+        nueva_anim_img.visible = False
+        infinita_anim_img.visible = False
+        nueva_anim_img.src = "Animacion_nueva/frame1.png"
+        infinita_anim_img.src = "Animacion_Infinita/frame32.png"
         try:
-            eyes_img.update(); text_home.update(); text_jump.update()
+            safe_update(eyes_img)
+            safe_update(text_home)
+            safe_update(text_jump)
+            safe_update(nueva_anim_img)
+            safe_update(infinita_anim_img)
         except Exception:
             pass
+
+    def safe_render():
+        """Renderizar sin causar errores de socket."""
+        try:
+            render()
+        except (OSError, BrokenPipeError, ConnectionResetError, Exception):
+            # Capturar errores de socket y otras excepciones silenciosamente
+            pass
+
+    def on_window_close(e):
+        """Manejador de cierre de ventana."""
+        running["v"] = False
+        time.sleep(0.2)  # Dar tiempo al thread para detenerse
 
     def game_loop():
         playing = False
@@ -715,9 +1189,9 @@ def main(page: ft.Page):
 
             if playing:
                 if gs.get("over") or gs.get("paused"):
-                    render(); time.sleep(0.1)
+                    safe_render(); time.sleep(0.1)
                 else:
-                    step(); render(); time.sleep(TICK)
+                    step(); safe_render(); time.sleep(TICK)
             else:
                 # ── Animación de ojos (primera vez o repetición por idle)
                 if not gs["anim"]["complete"]:
@@ -738,11 +1212,54 @@ def main(page: ft.Page):
                             text_home.opacity      = 1
                             text_jump.opacity      = 1
                             menu_idle["last_action"] = time.time()
-                            try:
-                                eyes_img.update()
-                                text_home.update()
-                                text_jump.update()
+                            safe_update(eyes_img)
+                            safe_update(text_home)
+                            safe_update(text_jump)
+                            nueva_anim_img.visible = True
+                            safe_update(nueva_anim_img)
+
+                # ── Animación nueva e infinita (después de ojos)
+                elif menu_idle["in_menu"] and (nueva_anim_img.visible or infinita_anim_img.visible):
+                    now = time.time()
+                    a_state = gs["anim_nueva"]
+                    idx = a_state["index"]
+                    mode = a_state["mode"]
+                    
+                    if mode == "normal":
+                        if idx < len(SECUENCIA_NUEVA):
+                            img_path, frame_duration = SECUENCIA_NUEVA[idx]
+                            if a_state["last_time"] == 0:
+                                a_state["last_time"] = now
+                                
+                            if now - a_state["last_time"] >= frame_duration:
+                                nueva_anim_img.src = img_path
+                                a_state["index"] += 1
+                                a_state["last_time"] = now
+                                try: nueva_anim_img.update()
+                                except Exception: pass
+                        else:
+                            # Cambio de fase: Acaba la animación nueva y empieza la infinita
+                            a_state.update({"index": 0, "last_time": now, "mode": "infinite"})
+                            nueva_anim_img.visible = False
+                            infinita_anim_img.src = SECUENCIA_INFINITA[0][0]
+                            infinita_anim_img.visible = True
+                            try: 
+                                safe_update(nueva_anim_img)
+                                safe_update(infinita_anim_img)
                             except Exception: pass
+                            
+                    elif mode == "infinite":
+                        if len(SECUENCIA_INFINITA) > 0:
+                            img_path, frame_duration = SECUENCIA_INFINITA[idx]
+                            if a_state["last_time"] == 0:
+                                a_state["last_time"] = now
+                            
+                            if now - a_state["last_time"] >= frame_duration:
+                                a_state["index"] = (a_state["index"] + 1) % len(SECUENCIA_INFINITA)
+                                a_state["last_time"] = now
+                                infinita_anim_img.src = img_path
+                                try: safe_update(infinita_anim_img)
+                                except Exception: pass
 
                 # ── Idle 15 s → repetir animación
                 elif menu_idle["in_menu"]:
@@ -757,10 +1274,69 @@ def main(page: ft.Page):
     def toggle_pause():
         if not gs.get("over"):
             gs["paused"] = not gs.get("paused", False)
+            # Si los detectores de pantalla existen, ocultarlos mientras está en pausa
+            dt = gs.get("detectors")
+            if dt:
+                try:
+                    left_det, right_det = dt
+                    vis = (not gs.get("paused", False)) and not admin_state.get("mouse_control")
+                    left_det.visible = vis
+                    right_det.visible = vis
+                except Exception:
+                    pass
+
+            # Actualizar texto/estado del botón de pausa si existe
+            try:
+                pb = gs.get("pause_btn_inner")
+                if pb is not None:
+                    if gs.get("paused"):
+                        pb.content = ft.Icon(ft.Icons.PLAY_ARROW, color="#00e5ff", size=20)
+                    else:
+                        pb.content = ft.Icon(ft.Icons.PAUSE, color="#00e5ff", size=20)
+                    try:
+                        pb.update()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # Ocultar el botón de pausa mientras el menú de pausa está activo
+            try:
+                pc = gs.get("pause_btn_container")
+                if pc is not None:
+                    pc.visible = not gs.get("paused", False)
+                    try:
+                        pc.update()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            try:
+                mo = gs.get("mouse_overlay")
+                if mo is not None:
+                    mo.visible = bool(admin_state.get("mouse_control") and not gs.get("paused") and not gs.get("over"))
+                    try:
+                        mo.update()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def btn_restart():
         reset_gs(); gen_platforms(); pick_target()
         cmd["v"] = "start"
+        # Restaurar visibilidad del overlay de ratón si el modo admin está activo
+        try:
+            mo = gs.get("mouse_overlay")
+            if mo is not None:
+                mo.visible = bool(admin_state.get("mouse_control") and not gs.get("paused") and not gs.get("over"))
+                try:
+                    mo.update()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def on_key(e: ft.KeyboardEvent):
         menu_idle["last_action"] = time.time()   # reset idle
@@ -768,6 +1344,8 @@ def main(page: ft.Page):
             if e.key == " ": btn_restart()
         elif e.key in ("Escape", "P", "p"):
             toggle_pause()
+        elif getattr(e, "control", False) and getattr(e, "shift", False) and e.key == "A":
+            open_admin_modal()
         elif not gs.get("paused"):
             if e.key == "Arrow Left":
                 gs["left"] = True;  gs["right"] = False
@@ -775,51 +1353,84 @@ def main(page: ft.Page):
                 gs["right"] = True; gs["left"]  = False
 
     page.on_keyboard_event = on_key
+    page.on_window_close = on_window_close
 
     # ── show_game ─────────────────────────────────────────────────────────────
+    # Construye la pantalla de juego en vivo con detectores de toque y el botón de pausa.
     def show_game():
         menu_idle["in_menu"] = False
         page.controls.clear()
-        page.add(ft.Column([
-            ft.Container(expand=True, content=game_stack),
-            ft.Container(
-                height=100, bgcolor="#0a0a22",
-                border=ft.border.only(top=ft.BorderSide(1, "#22ffffff")),
-                content=ft.Row([
-                    ft.GestureDetector(expand=True,
-                        content=ft.Container(height=100, bgcolor="#1a1a40",
-                            alignment=ft.alignment.center,
-                            border_radius=ft.border_radius.only(top_right=20, bottom_right=20),
-                            content=ft.Icon(ft.Icons.ARROW_BACK_IOS_NEW,
-                                            color="#00e5ff", size=45)),
-                        on_tap_down=lambda _: gs.update({"left": True,  "right": False}),
-                        on_tap_up=  lambda _: gs.update({"left": False}),
-                        on_pan_end= lambda _: gs.update({"left": False})),
-                    ft.GestureDetector(
-                        content=ft.Container(width=90, height=90, bgcolor="#0f0f2e",
-                            alignment=ft.alignment.center,
-                            shape=ft.BoxShape.CIRCLE,
-                            border=ft.border.all(2, "#33ffffff"),
-                            content=ft.Column([
-                                ft.Icon(ft.Icons.PAUSE_CIRCLE_OUTLINE,
-                                        color="#00e5ff", size=35),
-                                ft.Text("PAUSA", size=10, color="#44ffffff",
-                                        weight=ft.FontWeight.BOLD),
-                            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                               alignment=ft.MainAxisAlignment.CENTER, spacing=-2)),
-                        on_tap_down=lambda _: toggle_pause()),
-                    ft.GestureDetector(expand=True,
-                        content=ft.Container(height=100, bgcolor="#1a1a40",
-                            alignment=ft.alignment.center,
-                            border_radius=ft.border_radius.only(top_left=20, bottom_left=20),
-                            content=ft.Icon(ft.Icons.ARROW_FORWARD_IOS,
-                                            color="#00e5ff", size=45)),
-                        on_tap_down=lambda _: gs.update({"right": True, "left": False}),
-                        on_tap_up=  lambda _: gs.update({"right": False}),
-                        on_pan_end= lambda _: gs.update({"right": False})),
-                ], spacing=5, alignment=ft.MainAxisAlignment.CENTER, expand=True)),
-        ], spacing=0, expand=True))
-        page.update()
+
+        # Overlay detectors: left/right half-screen touch to move
+        left_detector = ft.Container(
+            left=0, top=0, width=W//2, height=H,
+            content=ft.GestureDetector(
+                expand=True,
+                content=ft.Container(bgcolor=None),
+                on_tap_down=lambda e: gs.update({"left": True, "right": False}),
+                on_tap_up=lambda e: gs.update({"left": False}),
+                on_pan_update=lambda e: gs.update({"left": True, "right": False}),
+                on_pan_end=lambda e: gs.update({"left": False}),
+            )
+        )
+
+        right_detector = ft.Container(
+            left=W//2, top=0, width=W - W//2, height=H,
+            content=ft.GestureDetector(
+                expand=True,
+                content=ft.Container(bgcolor=None),
+                on_tap_down=lambda e: gs.update({"right": True, "left": False}),
+                on_tap_up=lambda e: gs.update({"right": False}),
+                on_pan_update=lambda e: gs.update({"right": True, "left": False}),
+                on_pan_end=lambda e: gs.update({"right": False}),
+            )
+        )
+
+        # Use a Stack so the detectors sit above the game canvas
+        # Registrar detectores para poder ocultarlos cuando esté en pausa.
+        gs["detectors"] = (left_detector, right_detector)
+        left_detector.visible = not gs.get("paused", False) and not admin_state.get("mouse_control")
+        right_detector.visible = not gs.get("paused", False) and not admin_state.get("mouse_control")
+
+        # Crear botón de pausa como icono circular (sin texto)
+        pause_inner = ft.Container(
+            width=44, height=44, border_radius=22,
+            bgcolor=None,
+            border=ft.border.all(2, "#00e5ff"),
+            alignment=ft.alignment.center,
+            content=ft.Icon(ft.Icons.PAUSE, color="#00e5ff", size=20)
+        )
+        pause_gd = ft.GestureDetector(on_tap_down=lambda e: toggle_pause(), content=pause_inner)
+        # Colocar junto al HUD: a la derecha de la sección 'En inglés es:'
+        pause_container = ft.Container(left=W - 72, top=90, width=44, height=44, content=pause_gd)
+        gs["pause_btn_inner"] = pause_inner
+        gs["pause_btn_container"] = pause_container
+
+        mouse_overlay = ft.Container(
+            left=0, top=0, width=W, height=H,
+            visible=bool(admin_state.get("mouse_control") and not gs.get("paused") and not gs.get("over")),
+            content=ft.GestureDetector(
+                expand=True,
+                content=ft.Container(bgcolor=None),
+                on_hover=_mouse_control_hover,
+                on_tap_down=_mouse_control_start,
+                on_tap_up=_mouse_control_end,
+                on_pan_start=_mouse_control_start,
+                on_pan_update=_mouse_control_pan,
+                on_pan_end=_mouse_control_end,
+            )
+        )
+        gs["mouse_overlay"] = mouse_overlay
+
+        page.add(ft.Stack(width=W, height=H, controls=[
+            game_stack,
+            mouse_overlay,
+            left_detector,
+            right_detector,
+            pause_container,
+        ]))
+
+        safe_page_update()
 
     def start_game():
         reset_gs(); gen_platforms(); pick_target()
@@ -875,24 +1486,25 @@ def main(page: ft.Page):
                         color="#66ffffff", text_align=ft.TextAlign.CENTER),
                 ft.Container(height=14),
                 *[make_row(cat) for cat in VOCABULARY],
-                ft.Container(height=18),
-                ft.GestureDetector(on_tap_down=lambda _: start_game(),
-                    content=ft.Container(width=230, height=52, border_radius=12,
-                        bgcolor="#00e5ff", alignment=ft.alignment.center,
-                        content=ft.Text("▶  JUGAR", size=18, color="#000000",
-                                        weight=ft.FontWeight.BOLD))),
+                ft.Container(height=18), # separación antes de botones
+                ft.GestureDetector(on_tap_down=lambda _: start_game(), # start_review_session() para repaso previo
+                    content=ft.Container(width=230, height=52, border_radius=12, # 
+                        bgcolor="#00e5ff", alignment=ft.alignment.center, # 
+                        content=ft.Text("▶  JUGAR", size=18, color="#000000", #  
+                                        weight=ft.FontWeight.BOLD))), # botón grande
                 ft.Container(height=8),
                 ft.GestureDetector(on_tap_down=lambda _: show_menu(),
                     content=ft.Container(width=200, height=44, border_radius=10,
                         border=ft.border.all(1, "#44ffffff"),
                         alignment=ft.alignment.center,
                         content=ft.Text("← Volver al menú", size=14, color="#88ffffff"))),
-                ft.Container(expand=True),
+                ft.Container(height=16),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-               spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)))
-        page.update()
+               spacing=8, scroll=ft.ScrollMode.AUTO)))
+        safe_page_update()
 
     # ── Menú principal ────────────────────────────────────────────────────────
+    # Dibuja la pantalla principal con botones de juego, repaso y ayuda.
     def show_menu(restart_anim=True):
         cmd["v"] = "stop"
         if restart_anim:
@@ -906,12 +1518,17 @@ def main(page: ft.Page):
             ft.Container(content=ft.Column([text_home, text_jump],
                              horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=-15),
                          alignment=ft.alignment.center, width=W, height=180),
+            ft.Container(content=nueva_anim_img,
+                         alignment=ft.alignment.bottom_center, width=W, height=180, bottom=-85),
+            ft.Container(content=infinita_anim_img,
+                         alignment=ft.alignment.bottom_center, width=W, height=280, bottom=-120, padding=ft.padding.only(top=35))
         ], width=W, height=180)
 
         total_words = sum(len(v) for v in VOCABULARY.values())
 
         base_menu = ft.Container(
-            expand=True,
+            width=W,
+            height=page.window.height,
             gradient=ft.LinearGradient(
                 begin=ft.alignment.top_center, end=ft.alignment.bottom_center,
                 colors=["#0d0d2b", "#1a1a4e"]),
@@ -959,12 +1576,11 @@ def main(page: ft.Page):
                         alignment=ft.alignment.center,
                         content=ft.Text("Cómo jugar", size=15, color="#00e5ff",
                                         weight=ft.FontWeight.BOLD))),
-                ft.Container(expand=True),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                spacing=6, scroll=ft.ScrollMode.AUTO))
 
         review_overlay = ft.Container(
-            expand=True,
+            width=page.window.width, height=page.window.height,
             bgcolor="#aa000000",
             alignment=ft.alignment.center,
             visible=review_state["open"],
@@ -1031,7 +1647,7 @@ def main(page: ft.Page):
         )
 
         help_overlay = ft.Container(
-            expand=True,
+            width=page.window.width, height=page.window.height,
             bgcolor="#aa000000",
             alignment=ft.alignment.center,
             visible=help_state["open"],
@@ -1044,21 +1660,27 @@ def main(page: ft.Page):
                     ft.Text("Cómo jugar", size=20, color="#ffd700",
                             weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
                     ft.Container(height=8),
-                    ft.Text("Las letras doradas aparecen en orden sobre las plataformas. ¡Recógelas en secuencia!",
+                    ft.Text("Recoge las letras doradas que estan sobre las plataformas. ",
                             size=12, color="#88ffffff", text_align=ft.TextAlign.CENTER),
-                    ft.Container(height=8),
+                    ft.Container(height=6),
+                    ft.Text("Evita las letras incorrectas: Debes esquivarlas para no perder.",
+                            size=12, color="#88ffffff", text_align=ft.TextAlign.CENTER),
+                    ft.Container(height=10),
                     ft.Row([
                         ft.Container(width=18, height=18, bgcolor="#00e5ff", border_radius=4),
-                        ft.Text("  Normal  ", size=12, color="#ccffffff"),
-                        ft.Container(width=18, height=18, bgcolor="#ff6b35", border_radius=4),
-                        ft.Text("  Bouncy = salto extra", size=12, color="#ccffffff"),
+                        ft.Text("  Normal = Plataforma estándar", size=12, color="#ccffffff"),
                     ], alignment=ft.MainAxisAlignment.CENTER, spacing=4),
-                    ft.Container(height=8),
+                    ft.Container(height=6),
+                    ft.Row([
+                        ft.Container(width=18, height=18, bgcolor="#ff6b35", border_radius=4),
+                        ft.Text("  Bouncy = Plataforma naranja para salto extra", size=12, color="#ccffffff"),
+                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=4),
+                    ft.Container(height=10),
                     ft.Row([
                         ft.Image(src="ESCUDO.png", width=46, height=46,
                                  fit=ft.ImageFit.CONTAIN),
                         ft.Container(width=8),
-                        ft.Text("Escudo\n¡Invulnerable!", size=13,
+                        ft.Text("Escudo\nTe protege de un impacto", size=13,
                                 color="#ccffffff", text_align=ft.TextAlign.LEFT),
                     ], alignment=ft.MainAxisAlignment.CENTER, spacing=0),
                     ft.Container(height=8),
@@ -1066,7 +1688,7 @@ def main(page: ft.Page):
                         ft.Image(src="JETPACK.png", width=68, height=68,
                                  fit=ft.ImageFit.CONTAIN),
                         ft.Container(width=8),
-                        ft.Text("Jetpack\n¡Subida enorme!", size=13,
+                        ft.Text("Jetpack\nSube rápido para llegar más alto", size=13,
                                 color="#ccffffff", text_align=ft.TextAlign.LEFT),
                     ], alignment=ft.MainAxisAlignment.CENTER, spacing=0),
                     ft.Container(height=8),
@@ -1075,7 +1697,7 @@ def main(page: ft.Page):
                                      border_radius=11,
                                      border=ft.border.all(2, "#ff7777")),
                         ft.Container(width=8),
-                        ft.Text("Bolita roja = ¡PELIGRO!", size=13,
+                        ft.Text("Bolita roja = ¡PELIGRO! Evita tocarla.", size=13,
                                 color="#ccffffff"),
                     ], alignment=ft.MainAxisAlignment.CENTER, spacing=0),
                     ft.Container(height=12),
@@ -1088,11 +1710,112 @@ def main(page: ft.Page):
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6, tight=True))
         )
 
+        admin_controls["info"] = ft.Text(get_admin_info(), size=12, color="#ccffffff",
+                                         text_align=ft.TextAlign.LEFT)
+        admin_controls["skip_text"] = ft.Text(
+            f"Saltar repaso: {'ON' if admin_state['skip_review'] else 'OFF'}",
+            size=14, color="#ffffff", weight=ft.FontWeight.BOLD)
+        admin_controls["ghost_text"] = ft.Text(
+            f"Modo invisible: {'ON' if admin_state['ghost'] else 'OFF'}",
+            size=14, color="#ffffff", weight=ft.FontWeight.BOLD)
+        admin_controls["mouse_text"] = ft.Text(
+            f"Mover con ratón: {'ON' if admin_state['mouse_control'] else 'OFF'}",
+            size=14, color="#ffffff", weight=ft.FontWeight.BOLD)
+
+        admin_overlay = ft.Container(
+            width=page.window.width, height=page.window.height,
+            bgcolor="#bb000000",
+            alignment=ft.alignment.center,
+            visible=admin_state["open"],
+            content=ft.Container(
+                width=340, height=page.window.height - 120, padding=18,
+                bgcolor="#0a0a23",
+                border_radius=16,
+                border=ft.border.all(2, "#00e5ff"),
+                content=ft.Column([
+                    ft.Text("ADMINISTRADOR", size=20, color="#ffd700",
+                            weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+                    ft.Container(height=10),
+                    admin_controls["info"],
+                    ft.Container(height=12),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: (close_admin_modal(), btn_restart()),
+                        content=ft.Container(width=240, height=44, border_radius=10,
+                            bgcolor="#00e5ff", alignment=ft.alignment.center,
+                            content=ft.Text("Reiniciar juego", size=14, color="#000000",
+                                            weight=ft.FontWeight.BOLD))),
+                    ft.Container(height=8),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: (close_admin_modal(), safe_render()),
+                        content=ft.Container(width=240, height=44, border_radius=10,
+                            bgcolor="#22ffffff", alignment=ft.alignment.center,
+                            content=ft.Text("Actualizar vista", size=14, color="#ffffff",
+                                            weight=ft.FontWeight.BOLD))),
+                    ft.Container(height=8),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: (close_admin_modal(), start_game()),
+                        content=ft.Container(width=240, height=44, border_radius=10,
+                            bgcolor="#00cc88", alignment=ft.alignment.center,
+                            content=ft.Text("Aplicar y Jugar", size=14, color="#000000",
+                                            weight=ft.FontWeight.BOLD))),
+                    ft.Container(height=8),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: toggle_admin_skip_review(),
+                        content=ft.Container(width=240, height=44, border_radius=10,
+                            bgcolor="#22ffffff", alignment=ft.alignment.center,
+                            content=admin_controls["skip_text"])),
+                    ft.Container(height=8),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: toggle_admin_ghost(),
+                        content=ft.Container(width=240, height=44, border_radius=10,
+                            bgcolor="#22ffffff", alignment=ft.alignment.center,
+                            content=admin_controls["ghost_text"])),
+                    ft.Container(height=8),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: admin_apply_powerup("shield"),
+                        content=ft.Container(width=240, height=44, border_radius=10,
+                            bgcolor="#22ffffff", alignment=ft.alignment.center,
+                            content=ft.Text("Dar ESCUDO", size=14, color="#ffffff",
+                                            weight=ft.FontWeight.BOLD))),
+                    ft.Container(height=8),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: admin_apply_powerup("jetpack"),
+                        content=ft.Container(width=240, height=44, border_radius=10,
+                            bgcolor="#22ffffff", alignment=ft.alignment.center,
+                            content=ft.Text("Dar JETPACK", size=14, color="#ffffff",
+                                            weight=ft.FontWeight.BOLD))),
+                    ft.Container(height=8),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: toggle_admin_mouse_control(),
+                        content=ft.Container(width=240, height=44, border_radius=10,
+                            bgcolor="#22ffffff", alignment=ft.alignment.center,
+                            content=admin_controls["mouse_text"])),
+                    ft.Container(height=8),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: (close_admin_modal(), clear_progress()),
+                        content=ft.Container(width=240, height=44, border_radius=10,
+                            bgcolor="#ff5555", alignment=ft.alignment.center,
+                            content=ft.Text("Borrar progreso", size=14, color="#000000",
+                                            weight=ft.FontWeight.BOLD))),
+                    ft.Container(height=8),
+                    ft.GestureDetector(
+                        on_tap_down=lambda _: close_admin_modal(),
+                        content=ft.Container(width=240, height=44, border_radius=10,
+                            bgcolor="#ff4444", alignment=ft.alignment.center,
+                            content=ft.Text("Cerrar admin", size=14, color="#ffffff",
+                                            weight=ft.FontWeight.BOLD))),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8, tight=True,
+                   scroll=ft.ScrollMode.AUTO))
+        )
+
         page.controls.clear()
-        page.add(ft.Stack([base_menu, review_overlay, help_overlay], expand=True))
-        page.update()
+        page.add(ft.Stack([base_menu, review_overlay, help_overlay, admin_overlay], width=W, height=page.window.height))
+        # Limpiar referencias a detectores si existían (salimos del juego)
+        gs["detectors"] = None
+        safe_page_update()
 
     # ── Palabras encontradas ─────────────────────────────────────────────────
+    # Muestra una lista de palabras ya completadas por el jugador.
     def show_words_inline():
         menu_idle["in_menu"] = False
         found_set   = set(record.get("words_found", []))
@@ -1129,7 +1852,8 @@ def main(page: ft.Page):
 
         page.controls.clear()
         page.add(ft.Container(
-            expand=True,
+            width=page.window.width,
+            height=page.window.height,
             gradient=ft.LinearGradient(
                 begin=ft.alignment.top_center, end=ft.alignment.bottom_center,
                 colors=["#0d0d2b", "#141450"]),
@@ -1152,33 +1876,11 @@ def main(page: ft.Page):
                     content=ft.Container(width=220, height=44, border_radius=10,
                         bgcolor="#22ffffff", alignment=ft.alignment.center,
                         content=ft.Text("← Volver al menú", size=14, color="#ffffff"))),
-                ft.Container(expand=True),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-               spacing=0, alignment=ft.MainAxisAlignment.START, scroll=ft.ScrollMode.AUTO, expand=True)))
-        page.update()
+               spacing=0, alignment=ft.MainAxisAlignment.CENTER, scroll=ft.ScrollMode.AUTO)))
+        safe_page_update()
 
     show_menu()
 
-#generador de IP para mostrar la aplicacion
-def get_local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    except Exception:
-        return "127.0.0.1"
-    finally:
-        s.close()
 
-local_ip = get_local_ip()
-print(f"Servidor Flet en: http://{local_ip}:8550")
-print("En tu teléfono abre la app Flet y conéctala a esa dirección o usa conexión local.")
-
-
-ft.app(
-    target=main,
-    view=ft.AppView.FLET_APP_WEB,
-    host=local_ip,
-    port=8550,
-    assets_dir="assets"
-)
+ft.app(main, assets_dir="assets")
