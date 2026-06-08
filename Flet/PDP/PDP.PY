@@ -1522,7 +1522,7 @@ def main(page: ft.Page):
                          alignment=ft.alignment.bottom_center, width=W, height=180, bottom=-85),
             ft.Container(content=infinita_anim_img,
                          alignment=ft.alignment.bottom_center, width=W, height=280, bottom=-120, padding=ft.padding.only(top=35))
-        ], width=W, height=180)
+        ], width=W, height=180, clip_behavior=ft.ClipBehavior.NONE)
 
         total_words = sum(len(v) for v in VOCABULARY.values())
 
